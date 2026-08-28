@@ -67,6 +67,17 @@ Two details keep that exact:
 
 The video is stream-copied by the concat step, so it is encoded only once.
 
+## The agent skill
+
+`skills/edit-video/SKILL.md` teaches an agent to write the spec. It lives here, with the
+code whose schema it documents, and is symlinked into both skill directories so there is
+one source of truth:
+
+```
+~/.claude/skills/edit-video    -> git_repos/auto-edit/skills/edit-video
+~/.pi/agent/skills/edit-video  -> git_repos/auto-edit/skills/edit-video
+```
+
 ## Notes
 
 Output is staged beside the destination and moved into place only on success, so a failed
