@@ -65,7 +65,7 @@ Also established empirically, and just as expensive to rediscover:
 | `loudnorm` rejects `I` outside -70..-5 | The measurement pass uses a fixed `I=-24`; `input_*` do not depend on it |
 | `drawtext` expands `%{...}` even from a `textfile` | `expansion=none` is required or `"100%{pts}"` renders as a timestamp |
 | An MP4 chapter track cannot start after 0 | ffmpeg silently pins the first chapter; Matroska would keep the offset. One rule is used for both: the first chapter always starts at 0 |
-| The lilripper faster-whisper server returns text only | `/v1/audio/transcriptions` accepts `response_format` but **ignores it** — `vtt`, `srt` and `verbose_json` all come back as `{"text": ...}` with no timings. Timing is recovered by transcribing fixed windows, so the start of each is known |
+| The faster-whisper server **used to** return text only (fixed server-side 2026-08-28) | `/v1/audio/transcriptions` now honours `response_format=verbose_json` (segments with `start`/`end`; `timestamp_granularities[]=word` for words) and `srt`/`vtt`. `transcribe.py` asks for `verbose_json` and stamps every segment at its own start. Windows survive only as a request bound (`--window`, default 1800 s): measured on a 19-minute file, 120 s windows were no faster — the server is serial — and cost punctuation at every cut. A server that still answers bare `{"text": ...}` degrades to one mark per window |
 
 The STT endpoint is `http://lilripper:8552/v1/audio/transcriptions` (faster-whisper
 `large-v3`, CUDA, int8_float16), overridable with `VEDIT_STT_URL`. `/api/transcribe` is the

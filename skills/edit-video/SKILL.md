@@ -1,6 +1,6 @@
 ---
 name: edit-video
-description: Edit a video — remove sections, speed up slow passages, label them with floating text, add chapters and a contents card, fix quiet audio, and write a companion guide or summary from the transcript. Given a video with no or vague instructions, it surveys the recording and offers a menu of edits. Use when asked to cut, trim, shorten, speed up, caption, chapter, or clean up the sound of a recording (lecture, lab, screencast).
+description: Edit a video — remove sections, speed up slow passages, label them with floating text, add chapters and a contents card, fix quiet audio, and write a companion guide (with screenshots) or summary from the transcript. Given a video with no or vague instructions, it surveys the recording and offers a menu of edits. Use when asked to cut, trim, shorten, speed up, caption, chapter, or clean up the sound of a recording (lecture, lab, screencast).
 argument-hint: <video-file> [instructions]
 allowed-tools: Bash, Read, Write
 ---
@@ -65,8 +65,9 @@ wait; do not render anything yet.
 5. **Sound level** — report the measured LUFS. If it is well below −16, recommend
    normalising and say how far off it is; if it is fine, say so and leave it out.
 6. **Floating captions** — a note over a moment of footage ("the menu moved in v4").
-7. **A written companion** — from the transcript: a **step-by-step guide** if it is an
-   instruction video, a **detailed summary** if it is a lecture (see "Written companion").
+7. **A written companion** (`.qmd`) — from the transcript: a **step-by-step guide with a
+   screenshot at each step** if it is an instruction video, a **detailed summary** if it is
+   a lecture (see "Written companion").
 8. **Other one-offs** — an audio-only export (`.m4a`) for listening, a still frame for a
    thumbnail, a smaller re-encoded copy for sharing. These are plain `ffmpeg` on the
    *finished* file and never touch the source.
@@ -81,12 +82,13 @@ started it in the background; by the time the user has answered the menu it is d
 (`ls -la lecture-transcript.txt` — if it is missing, the STT server was unreachable; run
 `vedit transcribe lecture.mp4 -o lecture-transcript.txt` in the foreground to see why).
 
-Roughly 30x faster than real time, so a 20-minute lecture takes well under a minute. The
-output is `[m:ss] text` blocks **in original time**, which is the same clock the spec uses —
-so a timestamp you read there can go straight into `chapters[]` with no conversion.
+Roughly 20x faster than real time, so a 20-minute lecture takes about a minute. The output
+is one `[m:ss] text` line per spoken sentence, **in original time** — the same clock the
+spec uses, so a timestamp you read there can go straight into `chapters[]` with no
+conversion, and it is precise enough to find the moment a step happens on screen.
 
-Read it, propose chapters, and **show them to the user before rendering**. Windows are two
-minutes wide, so round the boundaries sensibly rather than quoting `[14:00]` verbatim.
+Read it, propose chapters, and **show them to the user before rendering**. Round chapter
+boundaries to the start of a sentence, not the middle of one.
 
 ## Step 4 — write the spec
 
@@ -140,13 +142,78 @@ that a limiter pass would be needed to go further — do not call it done at −
 ## Written companion
 
 Decide from the transcript, not the filename. An **instruction video** (installing
-something, a walkthrough) gets a step-by-step guide: numbered steps, the exact command or
-menu path used, what the screen should show when it worked, and a short troubleshooting
-table for anything that went wrong on camera. A **lecture** gets a detailed summary:
-sections following the chapters, each definition and formula as stated, the worked
-examples, the claims made and the questions left open. Quote the video's own wording for
-anything technical; do not paste the transcript. Write it beside the video as
-`<name>-guide.md` or `<name>-summary.md` and say where it is.
+something, a walkthrough) gets a step-by-step guide; a **lecture** gets a detailed summary.
+Either way it is a **Quarto document**, `<name>-guide.qmd` or `<name>-summary.qmd` beside
+the video, with a YAML header and `embed-resources: true` so the rendered HTML is one
+portable file:
+
+```yaml
+---
+title: "Installing R, RStudio and Quarto on macOS"
+subtitle: "Companion guide to the video"
+format:
+  html:
+    toc: true
+    embed-resources: true
+---
+```
+
+**Summary** (lecture): sections following the chapters, each definition and formula as
+stated, the worked examples, the claims made and the questions left open. Quote the video's
+own wording for anything technical; do not paste the transcript.
+
+**Guide** (instruction video): numbered steps, the exact command or menu path used, what
+the screen should show when it worked, a short troubleshooting table for anything that went
+wrong on camera — and **a screenshot at each step**, so the reader can compare their own
+screen to it. Screenshots come from the **source** video (the transcript's clock; the
+edited file has been cut and sped up) and go in a folder beside the document,
+`<name>-guide-img/step-02-download-rstudio.jpg`, one per step that changes what is on
+screen. A terminal step gets the terminal *after* the output appeared.
+
+### Finding the right frame
+
+The transcript tells you when a step was **said**; the screen changes when it **happened**,
+usually 1–10 s later. So do not grab the frame at the transcript timestamp — that shows the
+moment before the click. Get the list of screen changes once (about 15 s for a 20-minute
+recording; on a screencast a score of 0.04–0.1 is a page or dialog, 0.02 is typing and
+cursor noise, so `0.04` is the floor):
+
+```bash
+ffmpeg -hide_banner -i lecture.mp4 -an -vf "scale=480:-1,select='gt(scene,0.04)',metadata=print:key=lavfi.scene_score" \
+  -f null - 2>&1 | grep -E 'pts_time|scene_score' | paste - - | sed -E 's/.*pts_time:([0-9.]+).*scene_score=([0-9.]+)/\1 \2/'
+```
+
+For each step, the search interval is from the timestamp of the transcript line that
+describes the action to the timestamp of the next line, **plus 10 s**. Take the first screen
+change inside it, grab the frame **one second after it** (dialogs finish drawing), and
+`read` it before you embed it — it must show the state the reader is meant to reach, not
+the mouse on its way there. When there are several changes close together, or none, make
+one contact sheet of the interval and pick from it; that is one `read` for six candidates
+instead of six:
+
+```bash
+mkdir -p lecture-guide-img
+ffmpeg -hide_banner -v error -ss 140 -t 20 -i lecture.mp4 -an \
+  -vf "fps=1/4,scale=640:-1,drawtext=text='%{pts\:hms}':x=8:y=8:fontsize=28:fontcolor=yellow:box=1:boxcolor=black@0.6,tile=3x2" \
+  -frames:v 1 -q:v 4 sheet_140.jpg                                      # tiles at +0, +4, … +16 s
+ffmpeg -hide_banner -v error -ss 149 -i lecture.mp4 -frames:v 1 -q:v 3 lecture-guide-img/step-02-download-rstudio.jpg
+```
+
+Embed with a caption that says what the reader should see, and an alt text:
+
+```markdown
+![The RStudio download page - pick "Download RStudio desktop and server"](lecture-guide-img/step-02-download-rstudio.jpg){fig-alt="Browser on the RStudio download page"}
+```
+
+Full resolution, `-q:v 3`, no cropping and no annotation (boxes and arrows are not part of
+this skill yet — leave frames whole, and say in your report if a step really needs one).
+Aim for one screenshot per step and stop around 25. If you cannot view images, place each
+frame by timing alone (first change inside the interval, plus one second) and say so when
+you report.
+
+When the document is written, `quarto render lecture-guide.qmd` once if `quarto` is
+installed: it proves every image path resolves and leaves `lecture-guide.html` beside it.
+In pi, writing a `.qmd` runs the Quarto linter automatically; fix what it reports.
 
 ## Step 5 — dry run, always
 
@@ -164,22 +231,26 @@ A render takes minutes and needs nothing from you while it runs, so do not sit o
 Start it detached, with its output going to a log:
 
 ```bash
-nohup vedit apply lecture.mp4 edits.json -o lecture-edited.mp4 > render.log 2>&1 < /dev/null &
+nohup bash -c 'vedit apply lecture.mp4 edits.json -o lecture-edited.mp4; echo "exit $?"' \
+  > render.log 2>&1 < /dev/null &
 echo $! > render.pid
 ```
 
-That returns immediately. **Now write the companion** (guide or summary — see below) or
-anything else that was asked for and does not depend on the finished file. Then collect
-the render — wait on the PID, bounded, and read the tail of the log:
+That returns immediately. **Now write the companion** (guide or summary — see "Written
+companion" above; its screenshots read the *source* file, so they do not wait on the render
+either) or anything else that was asked for and does not depend on the finished file. Then
+collect the render — wait on the PID, bounded, and read the tail of the log:
 
 ```bash
-while kill -0 "$(cat render.pid)" 2>/dev/null; do sleep 15; done; tail -n 25 render.log
+for i in $(seq 120); do kill -0 "$(cat render.pid)" 2>/dev/null || break; sleep 15; done
+tail -n 25 render.log
 ```
 
-Give that call a generous `timeout` (30 minutes is safe for a lecture). The log ends
-with `wrote <path> (<duration>)`, the pasteable chapter list, and the output path — or
-`error: …`. **Compare the duration to the dry-run estimate** — if they disagree, something
-is wrong; do not report success. The source file is never modified; always write to a new
+That waits at most 30 minutes (give the call a matching `timeout`); if the loop runs out,
+say the render is still going rather than guessing. The log ends with `wrote <path>
+(<duration>)`, the pasteable chapter list, the output path, and `exit 0` — anything other
+than `exit 0` is a failure, and `error: …` above it says why. **Compare the duration to
+the dry-run estimate** — if they disagree, something is wrong; do not report success. The source file is never modified; always write to a new
 path. If there was nothing else to do while it rendered, run `vedit apply` in the
 foreground instead and skip the log.
 
@@ -196,6 +267,9 @@ foreground instead and skip the log.
 | Overlapping `speed` ranges | Rejected. Merge them into one entry. |
 | A `cut` and a `speed` over the same footage | The cut wins — that footage is removed, not sped up. |
 | Guessing the duration | Run `vedit probe` first. |
+| Screenshots from the edited file | Its clock is not the transcript's — cuts and speed-ups have moved everything. Grab from the source. |
+| A screenshot at the transcript timestamp | Shows the moment *before* the click. Take the first screen change between that line and the next, plus a second. |
+| A guide as `.md` | The companion is a `.qmd` with a YAML header; the screenshots need a folder beside it. |
 
 If `vedit` prints an error, it names the exact key and what it expected — read it and fix
 the spec rather than guessing at different syntax.
@@ -227,3 +301,8 @@ vedit transcribe lecture.mp4 -o t.txt         # -> read it, propose chapters
 vedit apply lecture.mp4 edits.json -o lecture-edited.mp4 --dry-run   # check
 vedit apply lecture.mp4 edits.json -o lecture-edited.mp4             # render
 ```
+
+Had the user also ticked the guide: start that render with `nohup … &`, list the screen
+changes, and for each step of the transcript grab and `read` the frame after its change,
+writing `lecture-guide.qmd` and `lecture-guide-img/` while the render runs — then collect
+the render log and report both.

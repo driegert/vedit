@@ -48,7 +48,8 @@ def _build_parser() -> argparse.ArgumentParser:
     stt.add_argument("video")
     stt.add_argument("-o", "--output", help="write here instead of standard output")
     stt.add_argument("--window", type=float, default=transcribe_mod.DEFAULT_WINDOW,
-                     help="seconds per transcription window (default 120)")
+                     help=f"seconds of audio per request (default {transcribe_mod.DEFAULT_WINDOW:g}; "
+                          "shorter windows lose punctuation at every cut)")
     stt.add_argument("--url", default=transcribe_mod.DEFAULT_URL,
                      help="transcription endpoint (or set VEDIT_STT_URL)")
 
