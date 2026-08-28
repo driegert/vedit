@@ -17,9 +17,17 @@ from pathlib import Path
 from . import VeditError
 from .media import MediaInfo
 
-TOP_LEVEL_KEYS = {"cuts", "speed", "slides", "notes"}
-SPEED_KEYS = {"range", "factor"}
+TOP_LEVEL_KEYS = {"cuts", "speed", "slides", "text", "chapters", "toc_card", "audio", "notes"}
+SPEED_KEYS = {"range", "factor", "label"}      # "label" is optional
+SPEED_REQUIRED = {"range", "factor"}
 SLIDE_KEYS = {"at", "seconds", "text", "image", "background", "color", "font_size"}
+TEXT_KEYS = {"range", "text", "position", "color", "background", "font_size"}
+CHAPTER_KEYS = {"at", "title"}
+TOC_KEYS = {"seconds", "title", "background", "color", "font_size"}
+AUDIO_KEYS = {"normalize", "target"}
+
+POSITIONS = {"top", "middle", "bottom"}
+NORMALIZERS = {"ebu", "peak", "none"}
 
 # ffmpeg colour: a name, or #RGB/#RRGGBB/#RRGGBBAA, either optionally with @alpha.
 COLOR_PATTERN = re.compile(r"^(?:#[0-9A-Fa-f]{3,8}|[A-Za-z][A-Za-z0-9]*)(?:@[0-9]*\.?[0-9]+)?$")
@@ -109,6 +117,15 @@ def _range(value, info: MediaInfo, *, where: str) -> tuple[float, float]:
     return start, min(stop, info.duration)
 
 
+def _font_size(value, *, where: str) -> int | None:
+    if value is None:
+        return None
+    size = int(_number(value, where=where))
+    if not 4 <= size <= 512:
+        raise VeditError(f"{where}: must be between 4 and 512 (got {size})")
+    return size
+
+
 def _items(raw: dict, key: str) -> list:
     value = raw.get(key)
     if value is None:
@@ -145,10 +162,48 @@ class Slide:
 
 
 @dataclass
+class Overlay:
+    """Floating text burned over the video for a stretch of the SOURCE timeline."""
+
+    start: float
+    stop: float
+    text: str
+    position: str = "bottom"
+    color: str = "white"
+    background: str = "black@0.55"
+    font_size: int | None = None
+
+
+@dataclass
+class Chapter:
+    at: float
+    title: str
+
+
+@dataclass
+class TocCard:
+    seconds: float = 5.0
+    title: str = "Contents"
+    background: str = "black"
+    color: str = "white"
+    font_size: int | None = None
+
+
+@dataclass
+class Audio:
+    normalize: str = "none"     # "ebu", "peak" or "none"
+    target: float = -16.0       # LUFS for ebu, dBTP for peak (both true-peak measured)
+
+
+@dataclass
 class EditSpec:
     cuts: list[tuple[float, float]] = field(default_factory=list)
     speeds: list[tuple[float, float, float]] = field(default_factory=list)  # (factor, start, stop)
     slides: list[Slide] = field(default_factory=list)
+    overlays: list[Overlay] = field(default_factory=list)
+    chapters: list[Chapter] = field(default_factory=list)
+    toc_card: TocCard | None = None
+    audio: Audio = field(default_factory=Audio)
 
 
 def load(path: str | Path, info: MediaInfo) -> EditSpec:
@@ -180,7 +235,7 @@ def from_dict(raw, info: MediaInfo, *, origin: str = "spec") -> EditSpec:
                 f'{{"range": ["5:00", "8:00"], "factor": 2.0}}, got {item!r}'
             )
         _reject_unknown(item, SPEED_KEYS, where=where)
-        missing = SPEED_KEYS - set(item)
+        missing = SPEED_REQUIRED - set(item)
         if missing:
             raise VeditError(f"{where}: missing {sorted(missing)}")
         start, stop = _range(item["range"], info, where=f"{where}.range")
@@ -191,6 +246,12 @@ def from_dict(raw, info: MediaInfo, *, origin: str = "spec") -> EditSpec:
                 f"Use a value above 1 to speed up, below 1 to slow down."
             )
         spec.speeds.append((factor, start, stop))
+        if "label" in item:
+            label = str(item["label"] or "").strip()
+            if not label:
+                raise VeditError(f"{where}.label: must not be empty; drop the key instead")
+            # The common case: caption the sped-up stretch without restating its range.
+            spec.overlays.append(Overlay(start=start, stop=stop, text=label))
 
     for index, item in enumerate(_items(raw, "slides")):
         where = f"slides[{index}]"
@@ -236,7 +297,112 @@ def from_dict(raw, info: MediaInfo, *, origin: str = "spec") -> EditSpec:
             )
         )
 
+    for index, item in enumerate(_items(raw, "text")):
+        where = f"text[{index}]"
+        if not isinstance(item, dict):
+            raise VeditError(
+                f'{where}: expected an object like '
+                f'{{"range": ["5:00", "8:00"], "text": "..."}}, got {item!r}'
+            )
+        _reject_unknown(item, TEXT_KEYS, where=where)
+        for required in ("range", "text"):
+            if required not in item:
+                raise VeditError(f'{where}: needs "{required}"')
+        caption = str(item["text"] or "").strip()
+        if not caption:
+            raise VeditError(f"{where}.text: must not be empty")
+        start, stop = _range(item["range"], info, where=f"{where}.range")
+        position = str(item.get("position", "bottom")).lower()
+        if position not in POSITIONS:
+            raise VeditError(
+                f"{where}.position: {position!r} is not valid. Use one of {sorted(POSITIONS)}"
+            )
+        spec.overlays.append(Overlay(
+            start=start, stop=stop, text=caption, position=position,
+            color=_color(item.get("color", "white"), where=f"{where}.color"),
+            background=_color(item.get("background", "black@0.55"),
+                              where=f"{where}.background"),
+            font_size=_font_size(item.get("font_size"), where=f"{where}.font_size"),
+        ))
+
+    for index, item in enumerate(_items(raw, "chapters")):
+        where = f"chapters[{index}]"
+        if not isinstance(item, dict):
+            raise VeditError(
+                f'{where}: expected an object like {{"at": "5:00", "title": "..."}}, got {item!r}'
+            )
+        _reject_unknown(item, CHAPTER_KEYS, where=where)
+        for required in ("at", "title"):
+            if required not in item:
+                raise VeditError(f'{where}: needs "{required}"')
+        title = str(item["title"]).strip()
+        if not title:
+            raise VeditError(f"{where}.title: must not be empty")
+        at = parse_time(item["at"], info, where=f"{where}.at")
+        if at >= info.duration:
+            raise VeditError(
+                f"{where}.at: {item['at']!r} is at or past the end of the "
+                f"{info.duration:.2f}s source"
+            )
+        spec.chapters.append(Chapter(at=at, title=title))
+
+    toc = raw.get("toc_card")
+    if toc:
+        if toc is True:
+            spec.toc_card = TocCard()
+        elif isinstance(toc, dict):
+            _reject_unknown(toc, TOC_KEYS, where="toc_card")
+            seconds = _number(toc.get("seconds", 5.0), where="toc_card.seconds")
+            if not 0 < seconds <= 600:
+                raise VeditError(f"toc_card.seconds: must be between 0 and 600 (got {seconds:g})")
+            spec.toc_card = TocCard(
+                seconds=seconds,
+                title=str(toc.get("title", "Contents")),
+                background=_color(toc.get("background", "black"), where="toc_card.background"),
+                color=_color(toc.get("color", "white"), where="toc_card.color"),
+                font_size=_font_size(toc.get("font_size"), where="toc_card.font_size"),
+            )
+        else:
+            raise VeditError(f"toc_card: expected true or an object, got {toc!r}")
+
+    audio = raw.get("audio")
+    if audio is not None:
+        if not isinstance(audio, dict):
+            raise VeditError(f'audio: expected an object like {{"normalize": "ebu"}}, got {audio!r}')
+        _reject_unknown(audio, AUDIO_KEYS, where="audio")
+        normalize = str(audio.get("normalize", "none")).lower()
+        if normalize not in NORMALIZERS:
+            raise VeditError(
+                f"audio.normalize: {normalize!r} is not valid. Use one of {sorted(NORMALIZERS)}"
+            )
+        if "target" in audio and normalize == "none":
+            raise VeditError(
+                'audio.target has no effect without "normalize"; '
+                'set normalize to "ebu" or "peak", or drop the target'
+            )
+        # -16 LUFS is a sensible speech target; peak normalising works in dBTP just
+        # below clipping instead, so both default and range follow the mode chosen.
+        # ffmpeg's loudnorm only accepts integrated targets down from -5 LUFS.
+        default, low, high = ((-1.5, -70.0, 0.0) if normalize == "peak"
+                              else (-16.0, -70.0, -5.0))
+        target = _number(audio.get("target", default), where="audio.target")
+        if not low <= target <= high:
+            units = "dBTP" if normalize == "peak" else "LUFS"
+            raise VeditError(
+                f"audio.target: for {normalize!r} it must be between {low:g} and "
+                f"{high:g} {units} (got {target:g})"
+            )
+        spec.audio = Audio(normalize=normalize, target=target)
+
     spec.slides.sort(key=lambda s: s.at)
+    spec.chapters.sort(key=lambda c: c.at)
+    spec.overlays.sort(key=lambda o: o.start)
+
+    if spec.toc_card is not None and not spec.chapters:
+        raise VeditError('toc_card needs "chapters" to list; add chapters or drop the card')
+    if spec.audio.normalize != "none" and not info.has_audio:
+        raise VeditError("audio.normalize was requested but the source has no audio stream")
+
     _check_speed_overlaps(spec)
     return spec
 

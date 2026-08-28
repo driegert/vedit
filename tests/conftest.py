@@ -34,8 +34,15 @@ def media(tmp_path_factory):
     ffmpeg("-f", "lavfi", "-i", f"testsrc2=size=320x180:rate={FPS}:duration={SOURCE_SECONDS}",
            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(silent))
 
+    quiet = directory / "quiet.mp4"
+    ffmpeg("-f", "lavfi", "-i", f"testsrc2=size=320x180:rate={FPS}:duration={SOURCE_SECONDS}",
+           "-f", "lavfi", "-i", f"sine=frequency=440:duration={SOURCE_SECONDS}",
+           "-af", "volume=-30dB",
+           "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+           "-c:a", "aac", "-ac", "1", "-shortest", str(quiet))
+
     image = directory / "slide.png"
     ffmpeg("-f", "lavfi", "-i", "color=c=darkgreen@0.6:s=900x900,format=rgba",
            "-frames:v", "1", str(image))
 
-    return SimpleNamespace(video=video, silent=silent, image=image)
+    return SimpleNamespace(video=video, silent=silent, image=image, quiet=quiet)

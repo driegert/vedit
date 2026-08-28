@@ -7,6 +7,8 @@ entry and looks plausible.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from util import run_vedit
@@ -43,6 +45,32 @@ BAD_SPECS = [
                                                          "color": "white:box=1:boxcolor=red"}]}),
     ("spec is not an object",     lambda m: [{"cuts": []}]),
     ("cuts remove everything",    lambda m: {"cuts": [["start", "end"]]}),
+    # --- floating text, chapters and audio ---
+    ("caption text is null",      lambda m: {"text": [{"range": ["0:00", "0:05"],
+                                                       "text": None}]}),
+    ("caption text is empty",     lambda m: {"text": [{"range": ["0:00", "0:05"],
+                                                       "text": "  "}]}),
+    ("empty speed label",         lambda m: {"speed": [{"range": ["0:00", "0:05"],
+                                                        "factor": 2, "label": ""}]}),
+    ("bad caption position",      lambda m: {"text": [{"range": ["0:00", "0:05"],
+                                                       "text": "x", "position": "middleish"}]}),
+    ("caption hidden by a cut",   lambda m: {"cuts": [["0:05", "0:20"]],
+                                             "text": [{"range": ["0:08", "0:12"],
+                                                       "text": "gone"}]}),
+    ("chapter with no title",     lambda m: {"chapters": [{"at": 0, "title": "  "}]}),
+    ("chapter past the end",      lambda m: {"chapters": [{"at": "9:99", "title": "Late"}]}),
+    ("chapters collapsed by a cut", lambda m: {"cuts": [["0:10", "0:20"]],
+                                               "chapters": [{"at": 0, "title": "Zero"},
+                                                            {"at": "0:12", "title": "A"},
+                                                            {"at": "0:15", "title": "B"}]}),
+    ("chapter cut off the end",   lambda m: {"cuts": [["0:20", "end"]],
+                                             "chapters": [{"at": 0, "title": "A"},
+                                                          {"at": "0:25", "title": "B"}]}),
+    ("toc card with no chapters", lambda m: {"toc_card": True}),
+    ("audio target, no normalize", lambda m: {"audio": {"target": -16}}),
+    ("ebu target above -5",       lambda m: {"audio": {"normalize": "ebu", "target": -2}}),
+    ("unknown normalizer",        lambda m: {"audio": {"normalize": "rms"}}),
+    ("unknown audio key",         lambda m: {"audio": {"normalize": "ebu", "loud": True}}),
 ]
 
 
@@ -63,3 +91,26 @@ def test_a_good_spec_still_succeeds(tmp_path, media):
     proc = run_vedit(tmp_path, media.video, {"cuts": [["0:00", "0:05"]]}, out)
     assert proc.returncode == 0, proc.stderr
     assert out.exists()
+
+
+def test_the_printed_example_validates_for_a_real_lecture():
+    """The example is what an agent copies, so it must survive validation.
+
+    It is checked against a synthetic 20-minute MediaInfo rather than the 30s
+    fixture, because the example quite reasonably refers to times like 14:05.
+    """
+    import json
+    import subprocess
+    import sys
+    from fractions import Fraction
+
+    from vedit import media, spec as spec_mod
+
+    proc = subprocess.run([sys.executable, "-m", "vedit.cli", "example"],
+                          capture_output=True, text=True, check=True)
+    lecture = media.MediaInfo(
+        path=Path("lecture.mp4"), width=1920, height=1080, fps=Fraction(30),
+        pix_fmt="yuv420p", duration=1200.0, has_audio=True,
+        sample_rate=48000, channels=2,
+    )
+    spec_mod.from_dict(json.loads(proc.stdout), lecture, origin="example")

@@ -55,11 +55,37 @@ re-verify every row before trusting it, because the code is built around them.
 Bare integers are frames; vedit converts all spec times to frames via `MediaInfo.frame_at`
 so the arithmetic is exact.
 
+## ffmpeg and STT behaviour
+
+Also established empirically, and just as expensive to rediscover:
+
+| Behaviour | Consequence |
+|---|---|
+| `loudnorm`'s own second pass lands ~2dB under target | It resamples to 192kHz internally and the level does not survive the trip back to the source rate. Confirmed three ways (loudnorm, ebur128, volumedetect) and they agree. loudnorm is used to MEASURE only; the correction is applied as a plain `volume` gain, which hits the target exactly |
+| `loudnorm` rejects `I` outside -70..-5 | The measurement pass uses a fixed `I=-24`; `input_*` do not depend on it |
+| `drawtext` expands `%{...}` even from a `textfile` | `expansion=none` is required or `"100%{pts}"` renders as a timestamp |
+| An MP4 chapter track cannot start after 0 | ffmpeg silently pins the first chapter; Matroska would keep the offset. One rule is used for both: the first chapter always starts at 0 |
+| The lilripper faster-whisper server returns text only | `/v1/audio/transcriptions` accepts `response_format` but **ignores it** — `vtt`, `srt` and `verbose_json` all come back as `{"text": ...}` with no timings. Timing is recovered by transcribing fixed windows, so the start of each is known |
+
+The STT endpoint is `http://lilripper:8552/v1/audio/transcriptions` (faster-whisper
+`large-v3`, CUDA, int8_float16), overridable with `VEDIT_STT_URL`. `/api/transcribe` is the
+older raw-body route Octavius uses for short voice commands.
+
 ## Architecture
 
 Slide positions split the **source** timeline into spans. Each span is rendered separately
 by auto-editor (cutting away everything outside it), slides are rendered as matching clips,
 and ffmpeg's concat demuxer joins them.
+
+`output_time()` in `render.py` is the centre of gravity: captions and chapter marks are
+written in SOURCE time and must land at OUTPUT time after cuts, ramps, slides and the
+contents card. Its `after_slide` flag picks which side of a card a timestamp falls on —
+a caption belongs over the footage, a chapter mark on the card that introduces it. The
+duration estimate in `plan()` comes from the same function, so the two cannot disagree.
+
+`_chapter_marks()` is the single canonical chapter sequence, used by both the ffmetadata
+file and the printed list. Keep it that way: they diverged once, and the printed list
+promised a chapter the file did not contain.
 
 Two details keep the output exact, and both are load-bearing:
 

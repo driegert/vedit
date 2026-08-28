@@ -10,10 +10,22 @@ vedit apply lecture.mp4 edits.json -o lecture-edited.mp4
 
 ```json
 {
-  "cuts":   [["0:00", "1:30"], ["14:05", "end"]],
-  "speed":  [{"range": ["5:00", "8:00"], "factor": 2.0}],
-  "slides": [{"at": "8:00", "text": "Part 2: Multitaper", "seconds": 3}]
+  "cuts":     [["0:00", "1:30"], ["14:05", "end"]],
+  "speed":    [{"range": ["5:00", "8:00"], "factor": 5, "label": "5x - waiting"}],
+  "text":     [{"range": ["9:00", "9:20"], "text": "the menu moved in v4"}],
+  "slides":   [{"at": "8:00", "text": "Part 2: Multitaper", "seconds": 3}],
+  "chapters": [{"at": "8:00", "title": "Installing the toolchain"}],
+  "toc_card": true,
+  "audio":    {"normalize": "ebu", "target": -16}
 }
+```
+
+`cuts` remove, `speed` compresses (with an optional floating `label`), `text` adds floating
+captions, `slides` insert full-screen cards, `chapters` produce real chapter markers plus a
+pasteable list, `toc_card` renders a contents card, and `audio` fixes a too-quiet recording.
+
+```bash
+vedit transcribe lecture.mp4 -o transcript.txt   # timestamped, for proposing chapters
 ```
 
 Times accept `"1:30"`, `"1:02:03"`, `90`, `"90s"`, `"start"`, `"end"`. Ranges are

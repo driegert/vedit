@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -61,6 +62,45 @@ def frame_bytes(path: Path, at: float) -> bytes:
         capture_output=True, check=True,
     )
     return proc.stdout
+
+
+def loudness(path: Path) -> float:
+    """Integrated loudness in LUFS, via a loudnorm measurement pass."""
+    proc = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-i", str(path),
+         "-af", "loudnorm=print_format=json", "-f", "null", "-"],
+        capture_output=True, text=True,
+    )
+    blob = re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", proc.stderr, re.DOTALL)
+    assert blob, f"no loudnorm summary in ffmpeg output:\n{proc.stderr[-800:]}"
+    return float(json.loads(blob.group(0))["input_i"])
+
+
+def chapters_of(path: Path) -> list[tuple[float, str]]:
+    """(start_seconds, title) for each embedded chapter."""
+    proc = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_chapters", "-of", "json", str(path)],
+        capture_output=True, text=True, check=True,
+    )
+    return [(float(c["start_time"]), c.get("tags", {}).get("title", ""))
+            for c in json.loads(proc.stdout).get("chapters", [])]
+
+
+def region_mean(path: Path, at: float, x0: int, y0: int, x1: int, y1: int) -> float:
+    """Mean brightness of a rectangle, averaged over all three channels.
+
+    A single pixel is too fragile for detecting a text box -- it can land on a
+    white glyph instead of the dark background behind it.
+    """
+    width, _ = resolution(path)
+    raw = frame_bytes(path, at)
+    total = count = 0
+    for y in range(y0, y1):
+        row = (y * width + x0) * 3
+        for value in raw[row:row + (x1 - x0) * 3]:
+            total += value
+            count += 1
+    return total / max(count, 1)
 
 
 def run_vedit(workdir: Path, source: Path, spec: dict, out: Path,
