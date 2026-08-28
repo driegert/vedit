@@ -1,0 +1,23 @@
+version = 1
+revision = 3
+requires-python = ">=3.12"
+
+[[package]]
+name = "auto-editor"
+version = "29.3.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ab/05/576ff555fb67975d6f0f19231933443bc62f68f88b15db0c551ad61580be/auto_editor-29.3.1.tar.gz", hash = "sha256:18d9dda2a2ff755ace56e6e8de399100fb50f0fc7053988c566cfc67af0e2693", size = 11679, upload-time = "2025-11-04T05:36:33.25Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ac/5f/bdf56a89dc55acd2f6c4be73706c8877d7cfc957833a04c6e3f30fe12e61/auto_editor-29.3.1-py3-none-any.whl", hash = "sha256:e320169454c5377af4ba092357d22a4e3b41ae532d35c298fcb4f335df319e69", size = 5906, upload-time = "2025-11-04T05:36:31.864Z" },
+]
+
+[[package]]
+name = "vedit"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "auto-editor" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "auto-editor", specifier = ">=29.3" }]

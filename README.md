@@ -1,0 +1,73 @@
+# vedit
+
+Declarative video editing for agents. You write a JSON spec; `vedit` applies it.
+
+```bash
+vedit probe lecture.mp4
+vedit apply lecture.mp4 edits.json -o lecture-edited.mp4 --dry-run
+vedit apply lecture.mp4 edits.json -o lecture-edited.mp4
+```
+
+```json
+{
+  "cuts":   [["0:00", "1:30"], ["14:05", "end"]],
+  "speed":  [{"range": ["5:00", "8:00"], "factor": 2.0}],
+  "slides": [{"at": "8:00", "text": "Part 2: Multitaper", "seconds": 3}]
+}
+```
+
+Times accept `"1:30"`, `"1:02:03"`, `90`, `"90s"`, `"start"`, `"end"`. Ranges are
+half-open, `[start, stop)`. **Every time refers to the original video** — earlier cuts
+never shift later timestamps. Slides take exactly one of `text` or `image`.
+
+## Install
+
+```bash
+uv tool install --editable .     # from this directory
+```
+
+Needs `ffmpeg`/`ffprobe` on the system; `auto-editor` comes in as a dependency.
+
+## Why this exists
+
+`auto-editor` does the cuts and speed ramps well, but its CLI has sharp edges that an
+LLM agent reliably falls off. All of the following were verified against **auto-editor
+29.3.1**, and `vedit` exists to absorb them:
+
+| Trap | Behaviour |
+|---|---|
+| Omitting `--when-silent nil` | Every silent passage is removed too, silently. |
+| `--cut-out A,B C,D` | The second range is parsed as an *input filename*. Repeat the flag instead. |
+| `--set-speed 2,20sec,25sec` | The factor comes **first**, not the range. |
+| `--set-speed` over a `--cut-out` | The speed ramp **wins** and resurrects the cut footage. |
+| `00:01:30` | Timecode is not supported — only `90sec`, `90s`, or bare frame numbers. |
+| `start` / `end` / negative times | Documented on the website, but rejected by this build. |
+| Two input files | They do not concatenate; you get one file's output. |
+| `-preset` / `-crf` | Not accepted; misparsed as input filenames. |
+| A video with no audio | The default `--edit audio` fails outright; needs `--edit none`. |
+
+## How it works
+
+Cuts and speed ramps go to `auto-editor`, whose ranges are all source-relative.
+
+Slides cannot be done in `auto-editor` at all: a v3 timeline referencing two different
+source files fails with `Failed to allocate buffer for new frame`. So slide positions
+split the source into spans, each span is rendered separately, slides are rendered as
+matching clips, and ffmpeg's concat demuxer joins them.
+
+Two details keep that exact:
+
+* **Edits are clipped to each span, and cuts are subtracted from speed ramps.** Otherwise
+  a ramp belonging to another span resurrects footage the span had cut away. A cut always
+  wins over a speed ramp covering the same footage.
+* **Segments carry PCM audio and are encoded to AAC once, at the end.** Concatenating AAC
+  segments accumulates priming padding at every junction — about 6 ms each, which becomes
+  audible drift over a lecture with several slides. With PCM intermediates a test edit
+  lands on exactly 36.000000s / 1080 frames instead of 36.023s.
+
+The video is stream-copied by the concat step, so it is encoded only once.
+
+## Notes
+
+Output is staged beside the destination and moved into place only on success, so a failed
+render never leaves a partial file. Writing over the source file is refused.

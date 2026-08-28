@@ -1,0 +1,15 @@
+[project]
+name = "vedit"
+version = "0.1.0"
+description = "Declarative, agent-friendly video editing: cuts, speed ramps and title slides from a JSON spec."
+readme = "README.md"
+authors = [{ name = "Dave Riegert" }]
+requires-python = ">=3.12"
+dependencies = ["auto-editor>=29.3"]
+
+[project.scripts]
+vedit = "vedit.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.9.9,<0.10.0"]
+build-backend = "uv_build"
