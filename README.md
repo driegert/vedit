@@ -28,6 +28,15 @@ uv tool install --editable .     # from this directory
 
 Needs `ffmpeg`/`ffprobe` on the system; `auto-editor` comes in as a dependency.
 
+## Tests
+
+```bash
+./run-tests.sh
+```
+
+Renders real video through the CLI; takes about a minute. See `CLAUDE.md` for what is
+covered and how to extend it.
+
 ## Why this exists
 
 `auto-editor` does the cuts and speed ramps well, but its CLI has sharp edges that an

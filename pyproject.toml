@@ -10,6 +10,13 @@ dependencies = ["auto-editor>=29.3"]
 [project.scripts]
 vedit = "vedit.cli:main"
 
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --tb=short"
+
 [build-system]
 requires = ["uv_build>=0.9.9,<0.10.0"]
 build-backend = "uv_build"

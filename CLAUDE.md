@@ -80,42 +80,39 @@ plausible-looking video that is not what was asked for. Prefer a clear error nam
 
 ## Testing
 
-**There is no automated test suite yet** — this is the biggest gap. Verification so far has
-been manual, against a synthetic fixture. Build one like this:
-
 ```bash
-ffmpeg -y -f lavfi -i "testsrc2=size=640x360:rate=30:duration=30" \
-       -f lavfi -i "sine=frequency=440:duration=30" \
-       -c:v libx264 -preset ultrafast -c:a aac -shortest test30.mp4
+./run-tests.sh              # or: uv run pytest
+uv run pytest -k slides     # one area
 ```
 
-The invariant that matters is **exact duration and frame count**, not "looks about right":
+59 tests, about a minute — they render real video through the actual CLI, so they catch
+flag-composition bugs that unit tests would not. Fixtures (a 30s clip with audio, a 30s
+silent clip, a 900x900 RGBA image) are built by ffmpeg once per session in `tests/conftest.py`.
 
-```bash
-ffprobe -v error -show_entries format=duration -of csv=p=0 out.mp4
-ffprobe -v error -count_frames -select_streams v:0 \
-        -show_entries stream=nb_read_frames -of csv=p=0 out.mp4
+```
+tests/
+  util.py                # ffprobe helpers, pixel sampling, CLI runner
+  test_timing.py         # exact duration and frame counts -- the core invariant
+  test_slides.py         # text expansion, letterboxing, colours
+  test_validation.py     # 25 malformed specs, each must fail cleanly
+  test_safety.py         # source protection, debris, dry-run estimates, probe/example
+  test_silent_source.py  # videos with no audio stream
 ```
 
-Cases that must keep passing on a 30s fixture (all verified at the initial commit):
+The invariant is **exact** duration and frame count, never "looks about right" — every
+expected number is derivable by hand from the spec. Tests invoke `python -m vedit.cli`
+from the working tree, so they never test a stale install.
 
-| Spec | Expected |
-|---|---|
-| cut 0–5, speed 2× on 20–25, text slide at 10s, image slide at 20s | 28.500000s / 855 frames |
-| cut and speed over the **same** range 10–20 | 20s — the cut wins |
-| slide at `0`, at `"end"`, or past the end | 33s, exactly one slide each |
-| source with no audio stream | renders, no audio in output |
-| overlapping cuts 0–10 and 5–15 | 15s (union) |
-| two slides at the same timestamp | both appear |
-| cuts removing everything, no slides | clean error, not a crash |
-| output path == input path | refused, source intact |
+Some behaviours cannot be asserted on a filter string, so they are tested through the
+pixels: `%{pts}` staying literal is checked by confirming two frames of one static slide
+are byte-identical, and letterboxing by sampling an edge pixel and a centre pixel.
 
-Malformed specs must produce `error: <message>` and exit 1 — **never a traceback**. Check
-unknown keys, wrong container types, backwards ranges, ranges past the end, non-numeric
-values, a colour containing `:` (filter injection), and both `text` and `image` on one slide.
-
-Slide text goes through `drawtext` with `expansion=none`; without it `%{...}` in agent text
-is evaluated as a drawtext directive (`"Done: 100%{pts}"` rendered as `"Done: 1001.000000"`).
+**When fixing a bug, add the case and watch it fail first.** The suite was mutation-tested
+at the initial commit — dropping `expansion=none`, removing the cut-subtraction from speed
+ramps, and disabling the source-overwrite guard each produced a failure. A green suite that
+cannot go red is worth nothing. Note the flagship "everything at once" case did *not* catch
+the speed-ramp mutation, because its cut and speed ranges do not overlap; interaction bugs
+need their own dedicated case.
 
 ## Development
 
