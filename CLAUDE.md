@@ -67,6 +67,7 @@ Also established empirically, and just as expensive to rediscover:
 | Behaviour | Consequence |
 |---|---|
 | `loudnorm`'s own second pass lands ~2dB under target | It resamples to 192kHz internally and the level does not survive the trip back to the source rate. Confirmed three ways (loudnorm, ebur128, volumedetect) and they agree. loudnorm is used to MEASURE only; the correction is applied as a plain `volume` gain, which hits the target exactly |
+| `alimiter` oversampled to 192 kHz (`aresample=192000,alimiter,aresample=48000`) takes ~2.8 dB off the *voice* and stops 2.3 dB under its own ceiling | Same loss as loudnorm's dynamic mode, same cause. The limiter that handles click transients (`_audio_filter`, engaged when the gain needed exceeds the true-peak headroom, up to `MAX_LIMITING` = 12 dB) runs at the source rate, where it lands on the target and the ceiling exactly (−16.24 LUFS / −1.50 dBTP on the `clicky` fixture). The fixture's clicks are 1 ms on purpose: EBU loudness is energy per 400 ms block, and a 5 ms click carries as much energy as the tone around it, so limiting *it* lowered the measured loudness |
 | `loudnorm` rejects `I` outside -70..-5 | The measurement pass uses a fixed `I=-24`; `input_*` do not depend on it |
 | `drawtext` expands `%{...}` even from a `textfile` | `expansion=none` is required or `"100%{pts}"` renders as a timestamp |
 | An MP4 chapter track cannot start after 0 | ffmpeg silently pins the first chapter; Matroska would keep the offset. One rule is used for both: the first chapter always starts at 0 |
@@ -110,8 +111,10 @@ Two details keep the output exact, and both are load-bearing:
   frames instead of 36.023s.
 
 Video is stream-copied by the concat step, so it is encoded only once. Output is staged at
-`.vedit-<name>` beside the destination and moved into place only on success; writing over
-the source is refused.
+`.vedit-<name>` beside the destination — any pre-existing entry there (a leftover, or a
+planted symlink to the source) is removed first — measured, and moved into place only if its
+duration is within `DURATION_TOLERANCE` (0.25 s) of the plan's estimate; writing over the
+source is refused. `still` does the same with the output size.
 
 Spec validation is deliberately strict — a silently ignored malformed entry produces a
 plausible-looking video that is not what was asked for. Prefer a clear error naming the key.
@@ -135,7 +138,7 @@ re-renders without it. An image input (by suffix) skips `at` and `-ss`.
 uv run pytest -k slides     # one area
 ```
 
-185 tests, a couple of minutes — they render real video through the actual CLI, so they catch
+187 tests, a couple of minutes — they render real video through the actual CLI, so they catch
 flag-composition bugs that unit tests would not. Fixtures (a 30s clip with audio, a 30s
 silent clip, a 900x900 RGBA image) are built by ffmpeg once per session in `tests/conftest.py`.
 

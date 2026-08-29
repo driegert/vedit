@@ -45,6 +45,31 @@ def test_normalising_a_silent_source_is_rejected(tmp_path, media):
     assert "no audio" in proc.stderr
 
 
+def test_click_transients_are_limited_rather_than_capping_the_gain(tmp_path, media):
+    """A screen recording: voice far below target, clicks near full scale.
+
+    Without the limiter the gain is capped by the clicks and the voice lands ~8 dB
+    short; with it the voice reaches the target and the clicks stay under -1.5 dBTP.
+    """
+    from util import true_peak
+
+    from vedit.render import MAX_LIMITING, TRUE_PEAK_CEILING
+
+    before, peak_before = loudness(media.clicky), true_peak(media.clicky)
+    assert before < -24, f"fixture should be quiet: {before} LUFS"
+    # The precondition that makes this test mean anything: a plain gain would breach
+    # the ceiling before the tone reached -16 LUFS -- and by less than the limiter is
+    # allowed to absorb, so the limiter branch (not the cap) is what runs.
+    excess = (-16 - before) - (TRUE_PEAK_CEILING - peak_before)
+    assert 0 < excess <= MAX_LIMITING - 1, f"fixture: {before} LUFS, {peak_before} dBTP"
+
+    out = tmp_path / "out.mp4"
+    proc = run_vedit(tmp_path, media.clicky, {"audio": {"normalize": "ebu", "target": -16}}, out)
+    assert proc.returncode == 0, proc.stderr
+    assert loudness(out) == pytest.approx(-16.0, abs=1.5)
+    assert true_peak(out) <= TRUE_PEAK_CEILING + 0.2      # AAC overshoot only
+
+
 def test_peak_normalisation_targets_true_peak(tmp_path, media):
     """peak mode works in dBTP and defaults to the same ceiling ebu respects."""
     import json

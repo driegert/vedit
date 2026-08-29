@@ -86,7 +86,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "auto-editor", specifier = ">=29.3" }]
+requires-dist = [{ name = "auto-editor", specifier = ">=29.3.1,<30" }]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8" }]

@@ -32,6 +32,9 @@ from .spec import Audio, EditSpec, Overlay, Slide
 # auto-editor understands only a small set of encoder flags; -preset and -crf are
 # not among them and would be misparsed as input filenames.
 TRUE_PEAK_CEILING = -1.5     # dBTP, the usual broadcast ceiling
+MAX_LIMITING = 12.0        # dB of transient limiting allowed before the gain is capped instead
+LIMITER_MARGIN = 0.5       # dB the limiter aims under the ceiling: the AAC encoder overshoots a little
+DURATION_TOLERANCE = 0.25  # seconds the render may differ from the plan's estimate before it is refused
 
 AE_ENCODE = ["-c:v", "libx264"]
 FF_ENCODE = ["-c:v", "libx264", "-preset", "medium", "-crf", "20"]
@@ -444,6 +447,18 @@ def _audio_filter(source: Path, audio: Audio, *, quiet: bool) -> str:
     trip back down to the source rate. A plain linear gain hits the target
     exactly, at the source rate, and preserves the dynamics untouched -- which is
     what a too-quiet lecture recording wants anyway.
+
+    Screen recordings are the exception: mouse clicks and key taps are transients
+    20dB or more above the voice, and a plain gain that keeps *them* under the
+    true-peak ceiling leaves the voice 8dB short. When the gain needed exceeds
+    the headroom, a lookahead limiter takes the transients (and only them) down:
+    the voice reaches the target, the clicks stay under the ceiling. The limiter
+    runs AT THE SOURCE RATE on purpose: oversampled to 192kHz (the textbook way
+    to catch inter-sample peaks) it took 2.8dB off the voice as well and left the
+    peak 2.3dB under the ceiling -- the same loss loudnorm's own dynamic mode
+    shows, for the same reason. At the source rate it lands on the target and the
+    ceiling exactly. Up to MAX_LIMITING dB of limiting is allowed; past that the
+    gain is capped as before, because squashing that much is not normalising.
     """
     measured = _measure_loudness(source)
     current, peak = float(measured["input_i"]), float(measured["input_tp"])
@@ -462,15 +477,26 @@ def _audio_filter(source: Path, audio: Audio, *, quiet: bool) -> str:
     gain = audio.target - current
 
     headroom = TRUE_PEAK_CEILING - peak
-    if gain > headroom:
-        _log(f"  capping the gain at {headroom:+.1f} dB to keep the true peak under "
-             f"{TRUE_PEAK_CEILING:g} dBTP; the result lands at "
-             f"{current + headroom:.1f} LUFS rather than {audio.target:g}", quiet=quiet)
-        gain = headroom
+    # The limiter's threshold sits LIMITER_MARGIN under the ceiling, so the reduction it
+    # actually performs is measured from there.
+    limiter_headroom = headroom - LIMITER_MARGIN
+    if gain > limiter_headroom + MAX_LIMITING:
+        gain = limiter_headroom + MAX_LIMITING
+        _log(f"  capping the gain at {gain:+.1f} dB: reaching {audio.target:g} LUFS would "
+             f"need more than {MAX_LIMITING:g} dB of limiting; the result lands at "
+             f"{current + gain:.1f} LUFS rather than {audio.target:g}", quiet=quiet)
 
     _log(f"normalising audio from {current:g} to {current + gain:.1f} LUFS "
          f"({gain:+.1f} dB)...", quiet=quiet)
-    return f"volume={gain:.2f}dB"
+    if gain <= headroom:
+        return f"volume={gain:.2f}dB"
+
+    _log(f"  limiting transients by up to {gain - limiter_headroom:.1f} dB to keep the true "
+         f"peak under {TRUE_PEAK_CEILING:g} dBTP (clicks and key taps, not the voice)",
+         quiet=quiet)
+    # latency=true: without it the lookahead delays the whole track by 5ms against the video.
+    limit = 10 ** ((TRUE_PEAK_CEILING - LIMITER_MARGIN) / 20)
+    return f"volume={gain:.2f}dB,alimiter=limit={limit:.4f}:level=false:latency=true"
 
 
 def _finish(source: Path, out: Path, info: MediaInfo, spec: EditSpec,
@@ -582,8 +608,17 @@ def render(info: MediaInfo, spec: EditSpec, out: Path, *,
     # Stage beside the destination, keeping the extension so the container is still
     # inferred, then move into place only once the render has fully succeeded.
     staging = out.parent / f".vedit-{out.name}"
+    # A leftover — or a planted symlink pointing at the source — must not be written through.
+    if staging.is_symlink() or staging.exists():
+        staging.unlink()
     try:
         _render_to(info, spec, staging, quiet=quiet)
+        actual, expected = duration_of(staging), output_time(spec, info, info.duration)
+        if abs(actual - expected) > DURATION_TOLERANCE:
+            raise VeditError(
+                f"the render measures {actual:.2f}s but the plan estimated {expected:.2f}s; "
+                f"refusing to install it — this is a bug in vedit, not in the spec"
+            )
         os.replace(staging, out)
     finally:
         staging.unlink(missing_ok=True)

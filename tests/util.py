@@ -76,6 +76,18 @@ def loudness(path: Path) -> float:
     return float(json.loads(blob.group(0))["input_i"])
 
 
+def true_peak(path: Path) -> float:
+    """True peak in dBTP, from the same loudnorm measurement pass."""
+    proc = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-i", str(path),
+         "-af", "loudnorm=print_format=json", "-f", "null", "-"],
+        capture_output=True, text=True,
+    )
+    blob = re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", proc.stderr, re.DOTALL)
+    assert blob, f"no loudnorm summary in ffmpeg output:\n{proc.stderr[-800:]}"
+    return float(json.loads(blob.group(0))["input_tp"])
+
+
 def chapters_of(path: Path) -> list[tuple[float, str]]:
     """(start_seconds, title) for each embedded chapter."""
     proc = subprocess.run(

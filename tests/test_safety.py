@@ -97,3 +97,23 @@ def test_example_is_printable_json(media):
     proc = _cli("example")
     assert proc.returncode == 0
     json.loads(proc.stdout)
+
+
+def test_a_planted_staging_symlink_cannot_reach_the_source(tmp_path, media):
+    """The staging file has a predictable name; a symlink there pointing at the source
+    would let the renderer write straight through it. The staging entry is removed
+    before anything is rendered."""
+    import hashlib
+    import shutil
+
+    source = tmp_path / "source.mp4"
+    shutil.copy(media.video, source)
+    before = hashlib.sha256(source.read_bytes()).hexdigest()
+
+    out = tmp_path / "out.mp4"
+    (tmp_path / ".vedit-out.mp4").symlink_to(source)
+    proc = run_vedit(tmp_path, source, {"cuts": [["0:00", "0:05"]]}, out)
+    assert proc.returncode == 0, proc.stderr
+    assert not out.is_symlink() and out.exists()
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == before, "the source was written"
+    assert not (tmp_path / ".vedit-out.mp4").exists()

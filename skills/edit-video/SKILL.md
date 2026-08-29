@@ -134,10 +134,12 @@ Broadcast speech sits near **−16 LUFS**. If `input_i` is well below that (−2
 `"audio": {"normalize": "ebu", "target": -16}` and mention it to the user. `vedit` measures
 and corrects in one step; you do not need to run a second pass yourself.
 
-Screen recordings often carry mouse-click transients far louder than the voice. If the
-render log says `capping the gain`, that is why: `vedit` stopped short of the target to
-keep those clicks under the true-peak ceiling. Report the level it actually reached and
-that a limiter pass would be needed to go further — do not call it done at −16.
+Screen recordings often carry mouse-click transients far louder than the voice. `vedit`
+handles that itself: when a plain gain would push the clicks over the true-peak ceiling
+before the voice reached the target, it limits the clicks (the log says `limiting
+transients`) and the voice still lands on target. Only if that would take more than 12 dB
+of limiting does it stop short — the log then says `capping the gain` and names the level
+it reached; report that level rather than calling it done at −16.
 
 ## Written companion
 
