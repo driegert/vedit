@@ -26,6 +26,8 @@ pasteable list, `toc_card` renders a contents card, and `audio` fixes a too-quie
 
 ```bash
 vedit transcribe lecture.mp4 -o transcript.txt   # timestamped, for proposing chapters
+vedit still lecture.mp4 still.json -o step.jpg     # one frame, highlighted/cropped, for a guide
+vedit example --still                            # starter spec for a still
 ```
 
 Times accept `"1:30"`, `"1:02:03"`, `90`, `"90s"`, `"start"`, `"end"`. Ranges are

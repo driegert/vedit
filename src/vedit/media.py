@@ -60,6 +60,7 @@ class MediaInfo:
     has_audio: bool
     sample_rate: int
     channels: int
+    is_image: bool = False      # a single picture (image2 / *_pipe demuxers), not a video
 
     @property
     def total_frames(self) -> int:
@@ -74,7 +75,12 @@ class MediaInfo:
         return max(0, min(self.total_frames, round(seconds * float(self.fps))))
 
 
-def probe(path: str | Path) -> MediaInfo:
+def probe(path: str | Path, *, still: bool = False) -> MediaInfo:
+    """Probe a video — or, with `still`, a picture too.
+
+    ffprobe reports a JPEG as a 0.04s `image2` clip but gives a PNG, WebP or BMP no
+    duration at all; `vedit still` needs both, so `still` lets a missing duration through.
+    """
     path = Path(path)
     if not path.exists():
         raise VeditError(f"input file does not exist: {path}")
@@ -96,8 +102,10 @@ def probe(path: str | Path) -> MediaInfo:
     if fps <= 0:
         fps = Fraction(30)
 
+    format_name = str(data.get("format", {}).get("format_name") or "")
+    is_image = format_name == "image2" or format_name.endswith("_pipe")
     duration = float(data.get("format", {}).get("duration") or video.get("duration") or 0.0)
-    if duration <= 0:
+    if duration <= 0 and not (still and is_image):
         raise VeditError(f"could not determine the duration of {path.name}")
 
     return MediaInfo(
@@ -110,6 +118,7 @@ def probe(path: str | Path) -> MediaInfo:
         has_audio=audio is not None,
         sample_rate=int(audio.get("sample_rate", 48000)) if audio else 48000,
         channels=int(audio.get("channels", 2)) if audio else 2,
+        is_image=is_image,
     )
 
 

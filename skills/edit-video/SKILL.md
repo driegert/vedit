@@ -1,6 +1,6 @@
 ---
 name: edit-video
-description: Edit a video — remove sections, speed up slow passages, label them with floating text, add chapters and a contents card, fix quiet audio, and write a companion guide (with screenshots) or summary from the transcript. Given a video with no or vague instructions, it surveys the recording and offers a menu of edits. Use when asked to cut, trim, shorten, speed up, caption, chapter, or clean up the sound of a recording (lecture, lab, screencast).
+description: Edit a video — remove sections, speed up slow passages, label them with floating text, add chapters and a contents card, fix quiet audio, and write a companion guide (with annotated screenshots) or summary from the transcript. Given a video with no or vague instructions, it surveys the recording and offers a menu of edits. Use when asked to cut, trim, shorten, speed up, caption, chapter, or clean up the sound of a recording (lecture, lab, screencast).
 argument-hint: <video-file> [instructions]
 allowed-tools: Bash, Read, Write
 ---
@@ -66,8 +66,8 @@ wait; do not render anything yet.
    normalising and say how far off it is; if it is fine, say so and leave it out.
 6. **Floating captions** — a note over a moment of footage ("the menu moved in v4").
 7. **A written companion** (`.qmd`) — from the transcript: a **step-by-step guide with a
-   screenshot at each step** if it is an instruction video, a **detailed summary** if it is
-   a lecture (see "Written companion").
+   screenshot at each step** (the control to click boxed and zoomed in on) if it is an
+   instruction video, a **detailed summary** if it is a lecture (see "Written companion").
 8. **Other one-offs** — an audio-only export (`.m4a`) for listening, a still frame for a
    thumbnail, a smaller re-encoded copy for sharing. These are plain `ffmpeg` on the
    *finished* file and never touch the source.
@@ -185,19 +185,65 @@ ffmpeg -hide_banner -i lecture.mp4 -an -vf "scale=480:-1,select='gt(scene,0.04)'
 
 For each step, the search interval is from the timestamp of the transcript line that
 describes the action to the timestamp of the next line, **plus 10 s**. Take the first screen
-change inside it, grab the frame **one second after it** (dialogs finish drawing), and
-`read` it before you embed it — it must show the state the reader is meant to reach, not
-the mouse on its way there. When there are several changes close together, or none, make
-one contact sheet of the interval and pick from it; that is one `read` for six candidates
-instead of six:
+change inside it, grab the frame **one second after it** (dialogs finish drawing) with
+`vedit still`, and `read` it before you embed it — it must show the state the reader is
+meant to reach, not the mouse on its way there:
 
 ```bash
 mkdir -p lecture-guide-img
+echo '{"at": 149}' | vedit still lecture.mp4 - -o lecture-guide-img/step-02-download-rstudio.jpg
+```
+
+When there are several changes close together, or none, make one contact sheet of the
+interval and pick from it; that is one `read` for six candidates instead of six:
+
+```bash
 ffmpeg -hide_banner -v error -ss 140 -t 20 -i lecture.mp4 -an \
   -vf "fps=1/4,scale=640:-1,drawtext=text='%{pts\:hms}':x=8:y=8:fontsize=28:fontcolor=yellow:box=1:boxcolor=black@0.6,tile=3x2" \
   -frames:v 1 -q:v 4 sheet_140.jpg                                      # tiles at +0, +4, … +16 s
-ffmpeg -hide_banner -v error -ss 149 -i lecture.mp4 -frames:v 1 -q:v 3 lecture-guide-img/step-02-download-rstudio.jpg
 ```
+
+### Drawing the reader's eye
+
+A whole 1920x1080 frame with one small button on it does not tell the reader where to
+look. When a step is about **one control** — a button, a menu item, a field, a checkbox —
+mark it and, usually, crop to it. `vedit still` does both from the same spec. Coordinates
+are always **full-frame pixels** (or percentages), even when cropping — the crop is applied
+last — so you measure once, on the frame you looked at, and never re-derive anything.
+
+1. **Measure.** Re-grab the frame with a labelled pixel grid and `read` it:
+   ```bash
+   echo '{"at": 149, "grid": true}' | vedit still lecture.mp4 - -o grid_149.jpg
+   ```
+   Lines fall every tenth of the frame and each carries its pixel coordinate, so a button
+   sitting between the `1152` and `1344` lines and just under the `648` line is at about
+   `x 1210, y 690`. For a small control use `"grid": 20`, or crop first and grid the crop
+   (the labels stay full-frame).
+2. **Mark.** Write the spec, `step-02.json`, and run it:
+   ```json
+   {"at": 149,
+    "highlights": [{"x": 1212, "y": 688, "w": 140, "h": 48, "label": "Click DOWNLOAD RSTUDIO"}],
+    "dim": 0.35, "crop": {"margin": 160}, "max_width": 1280}
+   ```
+   ```bash
+   vedit still lecture.mp4 step-02.json -o lecture-guide-img/step-02-download-rstudio.jpg
+   ```
+3. **Look.** `read` the result. If the box misses the control, adjust `x`/`y` and re-run —
+   it takes two seconds. Never embed a highlight you have not looked at.
+
+| Key | Meaning |
+|---|---|
+| `at` | The moment, in source time. Omit when the input is an image (`.jpg`/`.png`) rather than a video. |
+| `highlights[]` | `x`, `y`, `w`, `h` in full-frame pixels or percentages (`"40%"`); `shape` `box` (default) or `ellipse`; `color` (default `red`); `thickness`; `label` — a few words, drawn just above (or below) the shape. |
+| `dim` | 0–0.95: darken everything *outside* the highlights. 0.3–0.5 is plenty. Needs `highlights`. |
+| `crop` | `{"margin": N}` — the highlights plus N pixels around them (start at 120–200, enough to recognise the window) — or explicit `{"x", "y", "w", "h"}`. Highlights must lie inside it; a crop that would remove one is rejected. |
+| `grid` | `true` (10 divisions) or 2–25. A measuring aid for you — never in the guide. |
+| `max_width` | Downscale the result; 1280 is plenty for HTML. Never upscales. |
+
+One thing per screenshot: one highlight, or two numbered labels (`"1. Open File"`,
+`"2. Pick Import"`) when the order matters. Show the whole screen when the reader needs to
+recognise a situation (a fresh window, a dialog that appeared); crop when the step is one
+control. `vedit example --still` prints a complete spec.
 
 Embed with a caption that says what the reader should see, and an alt text:
 
@@ -205,11 +251,11 @@ Embed with a caption that says what the reader should see, and an alt text:
 ![The RStudio download page - pick "Download RStudio desktop and server"](lecture-guide-img/step-02-download-rstudio.jpg){fig-alt="Browser on the RStudio download page"}
 ```
 
-Full resolution, `-q:v 3`, no cropping and no annotation (boxes and arrows are not part of
-this skill yet — leave frames whole, and say in your report if a step really needs one).
-Aim for one screenshot per step and stop around 25. If you cannot view images, place each
-frame by timing alone (first change inside the interval, plus one second) and say so when
-you report.
+Whole frames go in at full resolution; an annotated crop can take `"max_width": 1280`.
+Arrows are not available — a box or ellipse with a short label does the job. Aim for one
+screenshot per step and stop around 25. If you cannot view images, place each frame by
+timing alone (first change inside the interval, plus one second), skip the highlights,
+and say so when you report.
 
 When the document is written, `quarto render lecture-guide.qmd` once if `quarto` is
 installed: it proves every image path resolves and leaves `lecture-guide.html` beside it.
@@ -270,6 +316,10 @@ foreground instead and skip the log.
 | Screenshots from the edited file | Its clock is not the transcript's — cuts and speed-ups have moved everything. Grab from the source. |
 | A screenshot at the transcript timestamp | Shows the moment *before* the click. Take the first screen change between that line and the next, plus a second. |
 | A guide as `.md` | The companion is a `.qmd` with a YAML header; the screenshots need a folder beside it. |
+| Re-measuring highlight coordinates after a crop | Coordinates are always full-frame; the crop is applied last. Measure once, on the gridded full frame. |
+| A gridded frame in the guide | The grid is for you. Render the embedded file without `grid`. |
+| A highlight nobody looked at | Off by a hundred pixels it boxes the wrong button. `read` every annotated still before embedding it. |
+| Composing `ffmpeg drawbox`/`crop` by hand | `vedit still` does it from a spec, checks the highlight is inside the crop, and verifies the output size. |
 
 If `vedit` prints an error, it names the exact key and what it expected — read it and fix
 the spec rather than guessing at different syntax.
@@ -303,6 +353,7 @@ vedit apply lecture.mp4 edits.json -o lecture-edited.mp4             # render
 ```
 
 Had the user also ticked the guide: start that render with `nohup … &`, list the screen
-changes, and for each step of the transcript grab and `read` the frame after its change,
-writing `lecture-guide.qmd` and `lecture-guide-img/` while the render runs — then collect
-the render log and report both.
+changes, and for each step of the transcript grab and `read` the frame after its change —
+gridding, boxing and cropping the ones that are about a single control — writing
+`lecture-guide.qmd` and `lecture-guide-img/` while the render runs; then collect the render
+log and report both.

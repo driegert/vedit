@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from . import VeditError, __version__
-from . import media, render, spec as spec_mod, transcribe as transcribe_mod
+from . import media, render, spec as spec_mod, still as still_mod, transcribe as transcribe_mod
 
 EXAMPLE = {
     "cuts": [["0:00", "1:30"], ["14:05", "end"]],
@@ -20,6 +20,19 @@ EXAMPLE = {
                  {"at": "8:00", "title": "Installing the toolchain"}],
     "toc_card": True,
     "audio": {"normalize": "ebu", "target": -16},
+}
+
+# Percentages, so the example is valid on any frame size.
+STILL_EXAMPLE = {
+    "at": "2:29",
+    "highlights": [
+        {"shape": "box", "x": "61%", "y": "58%", "w": "14%", "h": "7%", "label": "1. Download"},
+        {"shape": "ellipse", "x": "15%", "y": "8%", "w": "8%", "h": "14%", "color": "yellow"},
+    ],
+    "dim": 0.4,
+    "crop": {"margin": 80},
+    "max_width": 1280,
+    "notes": "coordinates are full-frame pixels or percentages; measure them with grid: true",
 }
 
 
@@ -53,7 +66,17 @@ def _build_parser() -> argparse.ArgumentParser:
     stt.add_argument("--url", default=transcribe_mod.DEFAULT_URL,
                      help="transcription endpoint (or set VEDIT_STT_URL)")
 
-    sub.add_parser("example", help="print an example spec")
+    still = sub.add_parser("still", help="grab one frame (or take an image) and annotate it: "
+                                         "highlights, dim, crop, coordinate grid")
+    still.add_argument("input", help="the source video, or an image file")
+    still.add_argument("spec", help="path to the JSON spec, or - to read stdin")
+    still.add_argument("-o", "--output", required=True, help="the .jpg or .png to write")
+    still.add_argument("--dry-run", action="store_true",
+                       help="print the resolved plan and exit without rendering")
+    still.add_argument("-q", "--quiet", action="store_true", help="suppress the plan")
+
+    example = sub.add_parser("example", help="print an example spec")
+    example.add_argument("--still", action="store_true", help="an example `still` spec instead")
     return parser
 
 
@@ -99,6 +122,43 @@ def _cmd_apply(args) -> int:
     return 0
 
 
+def _load_still_spec(path: str, info: media.MediaInfo) -> still_mod.StillSpec:
+    if path == "-":
+        try:
+            raw = json.load(sys.stdin)
+        except json.JSONDecodeError as exc:
+            raise VeditError(f"stdin is not valid JSON: {exc}") from None
+        return still_mod.from_dict(raw, info, origin="stdin")
+    return still_mod.load(path, info)
+
+
+def _cmd_still(args) -> int:
+    info = media.probe(args.input, still=True)
+    spec = _load_still_spec(args.spec, info)
+    out = Path(args.output)
+    if out.suffix.lower() not in still_mod.OUTPUT_SUFFIXES:
+        raise VeditError(f"write a .jpg or .png (got {out.name})")
+    if out.resolve() == info.path.resolve():
+        raise VeditError("refusing to write over the input; choose a different -o path")
+
+    if not args.quiet or args.dry_run:
+        for line in still_mod.plan(spec, info):
+            print(line, file=sys.stderr)
+    if args.dry_run:
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="vedit-still-") as workdir:
+            cmd = still_mod.command(spec, info, out, Path(workdir))
+        print(f"command    {' '.join(cmd)}", file=sys.stderr)
+        print("dry run: nothing was written", file=sys.stderr)
+        return 0
+
+    still_mod.render(info, spec, out)
+    width, height = still_mod.output_size(spec, info)
+    print(f"wrote {out} ({width}x{height})", file=sys.stderr)
+    print(out)
+    return 0
+
+
 def _cmd_transcribe(args) -> int:
     info = media.probe(args.video)
     print(f"transcribing {info.duration:.0f}s in {args.window:g}s windows...",
@@ -140,11 +200,17 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_probe(args)
         if args.command == "transcribe":
             return _cmd_transcribe(args)
+        if args.command == "still":
+            return _cmd_still(args)
         if args.command == "example":
-            print(json.dumps(EXAMPLE, indent=2))
+            print(json.dumps(STILL_EXAMPLE if args.still else EXAMPLE, indent=2))
             return 0
     except VeditError as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        # Permissions, a vanished file, an over-long command line: a message, not a traceback.
+        print(f"error: {exc.strerror or exc}: {exc.filename or ''}".rstrip(": "), file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         print("interrupted", file=sys.stderr)

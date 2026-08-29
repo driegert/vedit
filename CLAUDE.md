@@ -12,6 +12,9 @@ vedit probe lecture.mp4                                  # duration, fps, resolu
 vedit example                                            # print a starter spec
 vedit apply lecture.mp4 edits.json -o out.mp4 --dry-run  # resolve times, estimate, no render
 vedit apply lecture.mp4 edits.json -o out.mp4            # render
+vedit transcribe lecture.mp4 -o transcript.txt           # [m:ss] one line per sentence
+vedit still lecture.mp4 still.json -o step.jpg           # one frame: highlights, dim, crop, grid
+vedit example --still                                    # a starter still spec
 uv tool install --editable .                             # reinstall after changing code
 ```
 
@@ -30,7 +33,9 @@ auto-edit/
     media.py        # tool discovery (prefers sys.prefix/bin), ffprobe, MediaInfo
     spec.py         # JSON spec parsing + strict validation, time parsing
     render.py       # the pipeline: spans, slides, concat
-    cli.py          # argparse entry point: apply / probe / example
+    transcribe.py   # `vedit transcribe`: faster-whisper server, sentence timestamps
+    still.py        # `vedit still`: one annotated frame (or image) for illustrated guides
+    cli.py          # argparse entry point: apply / probe / transcribe / still / example
   skills/edit-video/SKILL.md   # the agent-facing skill (symlinked out, see below)
 ```
 
@@ -66,6 +71,13 @@ Also established empirically, and just as expensive to rediscover:
 | `drawtext` expands `%{...}` even from a `textfile` | `expansion=none` is required or `"100%{pts}"` renders as a timestamp |
 | An MP4 chapter track cannot start after 0 | ffmpeg silently pins the first chapter; Matroska would keep the offset. One rule is used for both: the first chapter always starts at 0 |
 | The faster-whisper server **used to** return text only (fixed server-side 2026-08-28) | `/v1/audio/transcriptions` now honours `response_format=verbose_json` (segments with `start`/`end`; `timestamp_granularities[]=word` for words) and `srt`/`vtt`. `transcribe.py` asks for `verbose_json` and stamps every segment at its own start. Windows survive only as a request bound (`--window`, default 1800 s): measured on a 19-minute file, 120 s windows were no faster — the server is serial — and cost punctuation at every cut. A server that still answers bare `{"text": ...}` degrades to one mark per window |
+
+| The `color` lavfi source hands out `253,0,0` for `red` | It negotiates YUV and converts back. `still.rgb_of` appends `,format=rgb24` to the source so the triple is exact — it resolves *any* ffmpeg colour name by asking ffmpeg, and an unknown name fails there |
+| `drawbox`/`drawgrid` take YUV only, and there is no ellipse filter | `still.py` draws every outline, the dim and the grid lines in one `geq` pass in rgb24 — one colour space until the encoder. ~1.5–3 s per 1080p still, all cores |
+| A `drawtext` `x=`/`y=` expression containing a comma breaks option parsing | `No option name near '…'` — quote them: `x='max(7,min(700,w-tw-7))'` |
+| `drawtext` runs before `crop`, so a label clamped to the *frame* can be cropped off | Label placement in `_label_filters` clamps to the crop rectangle when there is one |
+| `ffprobe` gives a JPEG a 0.04 s duration (`image2`) but a PNG/WebP/BMP (`*_pipe`) none at all | `media.probe(still=True)` lets a missing duration through for pictures and sets `MediaInfo.is_image` from the format name — checked on JPEG only at first, and every PNG *output* failed its post-render measurement (Codex caught it) |
+| `-ss T` returns the first frame whose time is **≥ T** (0.11 s at 30 fps is frame 4, not 3) | `still.py` resolves `at` to a frame index up front, refuses a time inside the last frame (no frame follows it — ffmpeg would write nothing), and seeks half a frame early so a rounding error cannot skip a frame |
 
 The STT endpoint is `http://lilripper:8552/v1/audio/transcriptions` (faster-whisper
 `large-v3`, CUDA, int8_float16), overridable with `VEDIT_STT_URL`. `/api/transcribe` is the
@@ -104,6 +116,18 @@ the source is refused.
 Spec validation is deliberately strict — a silently ignored malformed entry produces a
 plausible-looking video that is not what was asked for. Prefer a clear error naming the key.
 
+### `vedit still`
+
+The same shape, one frame at a time, for the illustrated guide the `edit-video` skill
+writes: `{at, highlights[], dim, crop, grid, max_width}` → one ffmpeg command → a `.jpg`
+or `.png`. The invariant is the **output size**: `output_size()` computes it from the crop
+and `max_width`, `render()` measures the staged file with ffprobe and refuses to install a
+mismatch. Two rules keep the agent's job simple: coordinates are **always full-frame
+pixels** (or `"NN%"`) even when cropping, because the crop is applied last; and a highlight
+outside an explicit crop is an error, not a silent omission. `grid: true` renders a
+labelled pixel grid for the measuring pass — the agent reads coordinates off it, then
+re-renders without it. An image input (by suffix) skips `at` and `-ss`.
+
 ## Testing
 
 ```bash
@@ -111,7 +135,7 @@ plausible-looking video that is not what was asked for. Prefer a clear error nam
 uv run pytest -k slides     # one area
 ```
 
-59 tests, about a minute — they render real video through the actual CLI, so they catch
+185 tests, a couple of minutes — they render real video through the actual CLI, so they catch
 flag-composition bugs that unit tests would not. Fixtures (a 30s clip with audio, a 30s
 silent clip, a 900x900 RGBA image) are built by ffmpeg once per session in `tests/conftest.py`.
 
@@ -123,6 +147,8 @@ tests/
   test_validation.py     # 25 malformed specs, each must fail cleanly
   test_safety.py         # source protection, debris, dry-run estimates, probe/example
   test_silent_source.py  # videos with no audio stream
+  test_transcribe.py     # verbose_json parsing, window offsets, fail-closed server errors
+  test_still.py          # exact ring/dim/crop pixels, output size, image input, the error table
 ```
 
 The invariant is **exact** duration and frame count, never "looks about right" — every
