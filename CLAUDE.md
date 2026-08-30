@@ -28,7 +28,7 @@ uv tool install --editable .                             # reinstall after chang
 ## Project Structure
 
 ```
-auto-edit/
+vedit/
   src/vedit/
     __init__.py     # VeditError — message is safe to show verbatim to an agent
     media.py        # tool discovery (prefers sys.prefix/bin), ffprobe, MediaInfo
@@ -241,7 +241,7 @@ themselves symlinks into other repos:
 ~/.pi/agent/skills -> git_repos/pi_harness/skills     # where the Pi agents read from
 ```
 
-Both `edit-video` entries point at `git_repos/auto-edit/skills/edit-video`. **If the spec
+Both `edit-video` entries point at `git_repos/vedit/skills/edit-video`. **If the spec
 schema changes, update SKILL.md in the same commit** — that pairing is the whole reason the
 skill lives here. The entries are untracked in those two repos; leave committing them to Dave.
 

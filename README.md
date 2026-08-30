@@ -95,8 +95,8 @@ crop would remove is an error.
 ### Install
 
 ```bash
-git clone https://github.com/driegert/auto-edit.git
-cd auto-edit
+git clone https://github.com/driegert/vedit.git
+cd vedit
 uv tool install --editable .        # puts `vedit` on PATH; edits to the source take effect immediately
 ```
 
