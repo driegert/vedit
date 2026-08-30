@@ -213,3 +213,17 @@ themselves symlinks into other repos:
 Both `edit-video` entries point at `git_repos/auto-edit/skills/edit-video`. **If the spec
 schema changes, update SKILL.md in the same commit** — that pairing is the whole reason the
 skill lives here. The entries are untracked in those two repos; leave committing them to Dave.
+
+## Open items
+
+- **Contents card at high chapter counts (noted 2026-08-30).** The model tends to propose
+  many sections — 12 on a 20-minute setup screencast — and that may well be right, but it
+  wants a look once lectures go through this: is the chapter count "good", and does the card
+  still read? Today `_toc_slide` (`render.py`) is a single column whose font size is
+  `min(height/14, height/(rows+2))` with a floor of 14 px — 67 px per line at 12 chapters
+  on 1080p, 45 px at 20, 32 px at 30 — and `drawtext` does not wrap, so a long title just
+  runs off the right edge. If the counts stay high, the fix is a **two-column card**
+  (split the entries at the midpoint, render two `drawtext` blocks with `x` at ~5 % and
+  ~52 %, keep one font size for both columns), possibly automatic past a threshold
+  (~14 entries) with a `toc_card.columns` override. Nothing to do until a lecture run shows
+  whether the count or the layout is the problem.
