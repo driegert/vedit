@@ -19,6 +19,11 @@ and chapters: write them in original time, and `vedit` works out where they land
 
 ## Step 1 — survey the video
 
+If this harness prompts for every write, tell the user once, before starting: `/workspace`
+(typed by them, in the folder that holds the video) lets the rest of the run go without
+prompts inside that folder and makes the recording itself undeletable. Do not ask again.
+
+
 Three cheap read-only checks, always, before proposing anything — in **one** command,
 and start the transcript in the background at the same time, since chapters and a written
 companion both need it and it is the slow one (`-vn` keeps the two ffmpeg passes to
