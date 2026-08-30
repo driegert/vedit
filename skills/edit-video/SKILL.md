@@ -196,6 +196,16 @@ mkdir -p lecture-guide-img
 echo '{"at": 149}' | vedit still lecture.mp4 - -o lecture-guide-img/step-02-download-rstudio.jpg
 ```
 
+**Look at one or two frames per turn, and write down what you saw.** Every frame you
+`read` costs 1–2.5k tokens and is re-sent with every request until it is retired: the
+harness sends only the most recent images (six by default) and turns each older one into a
+one-line placeholder naming the file. Once six newer images have arrived, a frame is gone
+from your view, so note its verdict in your reply the moment you look
+(`frame_250: Quarto installer, Finish button — usable`) — and never `read` seven at once,
+since the first would be retired before you saw it, and even with five it is easy to lose
+track of which picture was which. Grab frames you are only *judging* at
+`"max_width": 960`; only the one you embed needs full resolution.
+
 When there are several changes close together, or none, make one contact sheet of the
 interval and pick from it; that is one `read` for six candidates instead of six:
 
@@ -322,6 +332,8 @@ foreground instead and skip the log.
 | A gridded frame in the guide | The grid is for you. Render the embedded file without `grid`. |
 | A highlight nobody looked at | Off by a hundred pixels it boxes the wrong button. `read` every annotated still before embedding it. |
 | Composing `ffmpeg drawbox`/`crop` by hand | `vedit still` does it from a spec, checks the highlight is inside the crop, and verifies the output size. |
+| Five `read`s in one turn | Each is 1–2.5k tokens and you will mix up which picture was which. One or two per turn, and say what each showed. |
+| Looking back at an old frame | Once six newer images have arrived it is a placeholder. The note you wrote when you looked is what remains — so write it then. |
 
 If `vedit` prints an error, it names the exact key and what it expected — read it and fix
 the spec rather than guessing at different syntax.
