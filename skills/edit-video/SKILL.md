@@ -284,7 +284,17 @@ and say so when you report.
 
 When the document is written, `quarto render lecture-guide.qmd` once if `quarto` is
 installed: it proves every image path resolves and leaves `lecture-guide.html` beside it.
-In pi, writing a `.qmd` runs the Quarto linter automatically; fix what it reports.
+In pi, writing a `.qmd` runs the Quarto linter automatically. When it reports issues,
+fix **only the reported lines** with `edit` — never write the file again from scratch: a
+regenerated file reproduces its own mistakes, and seeing the same report twice means you
+are in exactly that loop.
+
+**Do not delete anything until the end.** The survey frames, contact sheets, grids,
+candidate stills, `scenes.txt`, and render logs cost nothing while they sit there, and
+they are your evidence if a screenshot or chapter needs revisiting. Clean them up as the
+**last** step, after the render duration matched the estimate, the guide lints clean, and
+(if quarto is installed) `quarto render` succeeded — and delete only files you created:
+`rm -f` with explicit names or narrow globs, never a directory.
 
 ## Step 5 — dry run, always
 
@@ -344,6 +354,8 @@ foreground instead and skip the log.
 | Re-measuring highlight coordinates after a crop | Coordinates are always full-frame; the crop is applied last. Measure once, on the gridded full frame. |
 | A gridded frame in the guide | The grid is for you. Render the embedded file without `grid`. |
 | A highlight nobody looked at | Off by a hundred pixels it boxes the wrong button. `read` every annotated still before embedding it. |
+| Rewriting the `.qmd` when the linter reports issues | The rewrite reproduces them. `edit` the reported lines, nothing else. |
+| Cleaning up before everything is verified | Survey frames and logs are your evidence. Delete them last, by name, after lint + render pass. |
 | Composing `ffmpeg drawbox`/`crop` by hand | `vedit still` does it from a spec, checks the highlight is inside the crop, and verifies the output size. |
 | Five `read`s in one turn | Each is 1–2.5k tokens and you will mix up which picture was which. One or two per turn, and say what each showed. |
 | Looking back at an old frame | Once six newer images have arrived it is a placeholder. The note you wrote when you looked is what remains — so write it then. |
