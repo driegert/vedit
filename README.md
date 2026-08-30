@@ -123,6 +123,51 @@ ln -s "$(pwd)/skills/edit-video" ~/.claude/skills/edit-video      # Claude Code
 ln -s "$(pwd)/skills/edit-video" ~/.pi/agent/skills/edit-video    # pi
 ```
 
+## Hosting the video (optional)
+
+`vedit snippet` turns a rendered video into paste-ready embed HTML for an LMS:
+
+```bash
+vedit snippet lecture-edited.mp4 --url "https://videos.example.org/course/lecture.mp4" -o lecture-snippet.html
+```
+
+The output is a self-contained fragment — a [Vidstack](https://vidstack.io) player at a
+pinned version, with the file's embedded chapter markers inlined as a base64 `data:` URI
+WebVTT track. Nothing needs hosting except the video itself; viewers get a segmented seek
+bar and a chapters menu. Chapters are read from the rendered file's own metadata, so they
+are always the ones `vedit apply` wrote — regenerate the snippet rather than editing it.
+
+Verified working pasted into **Blackboard Ultra** (source view, `<>` in the editor), whose
+sanitizer passes `<link>`, `<script type="module">`, and custom elements through — but that
+depends on your organization's Blackboard restrictions (or lack of them), so test in a
+sandbox course first. If your LMS strips scripts, host the snippet in a plain HTML page
+instead and embed that page's URL in an `<iframe>`.
+
+The video host just needs three things: HTTPS, a **direct file URL** (raw bytes, not a
+share/viewer page — this rules out consumer Drive/OneDrive links), and **HTTP range
+requests** (or seeking degrades). Check a candidate with:
+
+```bash
+curl -sI -H 'Range: bytes=0-1023' "https://videos.example.org/course/lecture.mp4" | head -1   # want: 206
+```
+
+Any static web server qualifies. Cloudflare R2 with a custom domain is a good fit (free
+egress, edge caching, ~free at lecture scale); with rclone:
+
+```bash
+rclone config create my-r2 s3 provider=Cloudflare   access_key_id=... secret_access_key=...   endpoint=https://<account-id>.r2.cloudflarestorage.com no_check_bucket=true
+rclone copyto lecture-edited.mp4 my-r2:videos/course/lecture.mp4
+```
+
+Two R2 gotchas: rclone takes the token's **S3 credential pair**, not the API "Token value"
+(if only the token survives, the S3 secret is its SHA-256 hex); and `no_check_bucket=true`
+is required with a bucket-scoped token, whose inability to create buckets otherwise fails
+every upload with `AccessDenied` while listing still works.
+
+The player version is pinned (`--assets` overrides the base URL) because pasted LMS items
+can never be updated in bulk — an unpinned "latest" would eventually break every embedded
+video at once. Old snippets keep working when the pin moves.
+
 ## Why this exists
 
 `auto-editor` does cuts and speed ramps well, but its command line has edges an agent

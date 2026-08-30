@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from . import VeditError, __version__
-from . import media, render, spec as spec_mod, still as still_mod, transcribe as transcribe_mod
+from . import media, render, snippet as snippet_mod, spec as spec_mod, still as still_mod, transcribe as transcribe_mod
 
 EXAMPLE = {
     "cuts": [["0:00", "1:30"], ["14:05", "end"]],
@@ -77,6 +77,17 @@ def _build_parser() -> argparse.ArgumentParser:
     still.add_argument("--dry-run", action="store_true",
                        help="print the resolved plan and exit without rendering")
     still.add_argument("-q", "--quiet", action="store_true", help="suppress the plan")
+
+    snip = sub.add_parser("snippet",
+                          help="emit paste-ready HTML: a pinned Vidstack player with the "
+                               "video's embedded chapters inlined (for LMS rich-text editors)")
+    snip.add_argument("video", help="the rendered video (chapters are read from its metadata)")
+    snip.add_argument("--url", required=True, help="public URL the video will be served from")
+    snip.add_argument("-o", "--output", help="write here instead of standard output")
+    snip.add_argument("--assets", default=snippet_mod.ASSETS_BASE,
+                      help="base URL for the player assets (default: pinned jsDelivr)")
+    snip.add_argument("--max-width", type=int, default=960,
+                      help="player max width in px (default 960)")
 
     example = sub.add_parser("example", help="print an example spec")
     example.add_argument("--still", action="store_true", help="an example `still` spec instead")
@@ -194,6 +205,22 @@ def _cmd_probe(args) -> int:
     return 0
 
 
+
+def _cmd_snippet(args) -> int:
+    chapters = snippet_mod.read_chapters(args.video)
+    if not chapters:
+        print(f"note: {Path(args.video).name} has no embedded chapters; "
+              "emitting a player without chapter navigation", file=sys.stderr)
+    text = snippet_mod.build(args.url, chapters, assets=args.assets,
+                             max_width=args.max_width)
+    if args.output:
+        Path(args.output).write_text(text, encoding="utf-8")
+        print(f"wrote {args.output}", file=sys.stderr)
+    else:
+        print(text, end="")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
@@ -205,6 +232,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_transcribe(args)
         if args.command == "still":
             return _cmd_still(args)
+        if args.command == "snippet":
+            return _cmd_snippet(args)
         if args.command == "example":
             print(json.dumps(STILL_EXAMPLE if args.still else EXAMPLE, indent=2))
             return 0

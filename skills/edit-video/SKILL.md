@@ -75,7 +75,10 @@ wait; do not render anything yet.
 7. **A written companion** (`.qmd`) — from the transcript: a **step-by-step guide with a
    screenshot at each step** (the control to click boxed and zoomed in on) if it is an
    instruction video, a **detailed summary** if it is a lecture (see "Written companion").
-8. **Other one-offs** — an audio-only export (`.m4a`) for listening, a still frame for a
+8. **A Blackboard embed** — upload the finished file to the video host and emit
+   a paste-ready player snippet (`vedit snippet`) with the chapter navigation inlined.
+   Worth offering only when item 3 (chapters) is also taken.
+9. **Other one-offs** — an audio-only export (`.m4a`) for listening, a still frame for a
    thumbnail, a smaller re-encoded copy for sharing. These are plain `ffmpeg` on the
    *finished* file and never touch the source.
 
@@ -344,6 +347,28 @@ the dry-run estimate** — if they disagree, something is wrong; do not report s
 path. If there was nothing else to do while it rendered, run `vedit apply` in the
 foreground instead and skip the log.
 
+## Publishing — the Blackboard snippet
+
+If the user took the Blackboard embed option (or asks later), publish the *finished* file:
+
+```bash
+rclone copyto lecture-edited.mp4 <remote>:videos/<course>/<name>.mp4
+vedit snippet lecture-edited.mp4 --url "https://<video-host>/<course>/<name>.mp4" \
+  -o lecture-snippet.html
+```
+
+The rclone remote name and the public base URL are machine configuration, not part of
+this skill — if you do not know them, ask the user (or check their notes) rather than
+guessing a domain.
+
+The snippet is self-contained: a version-pinned Vidstack player with the chapters read
+from the rendered file's own metadata and inlined as a data: URI — nothing else to host,
+and pasting it into a Blackboard Ultra item (source view, `<>` in the editor) is the whole
+job. Print the snippet path and say to paste its contents. Never hand-edit the asset URLs
+or the base64 track; regenerate with `vedit snippet` instead. If the rclone remote
+is missing, still emit the snippet with the intended URL and hand the user the upload
+command — do not try to configure credentials yourself.
+
 ## Common mistakes
 
 | Mistake | What happens |
@@ -361,6 +386,7 @@ foreground instead and skip the log.
 | Screenshots from the edited file | Its clock is not the transcript's — cuts and speed-ups have moved everything. Grab from the source. |
 | A screenshot at the transcript timestamp | Shows the moment *before* the click. Take the first screen change between that line and the next, plus a second. |
 | A guide as `.md` | The companion is a `.qmd` with a YAML header; the screenshots need a folder beside it. |
+| Chapters re-typed into an embed | `vedit snippet` reads them from the rendered file; regenerate, never hand-edit the base64. |
 | Re-measuring highlight coordinates after a crop | Coordinates are always full-frame; the crop is applied last. Measure once, on the gridded full frame. |
 | A gridded frame in the guide | The grid is for you. Render the embedded file without `grid`. |
 | A highlight nobody looked at | Off by a hundred pixels it boxes the wrong button. `read` every annotated still before embedding it. |

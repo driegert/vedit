@@ -15,6 +15,7 @@ vedit apply lecture.mp4 edits.json -o out.mp4            # render
 vedit transcribe lecture.mp4 -o transcript.txt           # [m:ss] one line per sentence
 vedit still lecture.mp4 still.json -o step.jpg           # one frame: highlights, dim, crop, grid
 vedit example --still                                    # a starter still spec
+vedit snippet out.mp4 --url https://videos.example.org/x.mp4  # paste-ready LMS embed HTML
 uv tool install --editable .                             # reinstall after changing code
 ```
 
@@ -35,7 +36,8 @@ auto-edit/
     render.py       # the pipeline: spans, slides, concat
     transcribe.py   # `vedit transcribe`: faster-whisper server, sentence timestamps
     still.py        # `vedit still`: one annotated frame (or image) for illustrated guides
-    cli.py          # argparse entry point: apply / probe / transcribe / still / example
+    snippet.py      # `vedit snippet`: paste-ready LMS embed HTML with inlined chapters
+    cli.py          # argparse entry point: apply / probe / transcribe / still / snippet / example
   skills/edit-video/SKILL.md   # the agent-facing skill (symlinked out, see below)
 ```
 
@@ -162,6 +164,20 @@ miss. Crop `margin` and the explicit-crop containment check use the extent (the 
 both rectangles), the label sits above the padded rect, and for a nonzero pad the plan
 prints `pad N -> x y w h` (the extent). Tests pin `"pad": 0` on the geometry fixtures and cover the default,
 the override, edge clamping, and the plan/margin arithmetic.
+
+`snippet` (2026-08-30) emits paste-ready LMS embed HTML: a Vidstack player pinned to
+`@vidstack/cdn@1.15.6` on jsDelivr, the video by `--url`, and the file's embedded chapters
+inlined as a base64 `data:` WebVTT track — so the snippet has no sidecar and the only
+external dependency besides the video is the pinned CDN. Verified against Blackboard
+Ultra (2026-08-30): its editor passes `<link>`/`<script type=module>`/custom elements
+through, so the pasted snippet renders the full player, chapters and all. The pin is
+load-bearing twice over: pasted course items can never be re-pointed in bulk, and the
+package's own chunk imports are *absolute pinned jsDelivr URLs*, which is also why naive
+self-hosting of the assets doesn't work (vendoring would mean rewriting those URLs —
+considered, parked). Cue titles are sanitized (`-->` → `→`, newlines flattened, HTML
+escaped, empty → `Chapter N`) so no chapter title can break the VTT grammar or the HTML
+attribute it rides in. A chapterless video still gets a player, minus the track, with a
+note on stderr. Tests: `tests/test_snippet.py`.
 
 ## Testing
 
