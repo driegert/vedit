@@ -64,9 +64,11 @@ wait; do not render anything yet.
 2. **Trim the start and end** — dead air before the talking starts or after it stops.
 3. **Chapters and a contents card** — needs a transcript; chapter markers plus a pasteable
    `0:00 Title` list, and optionally a contents card at the start.
-4. **Section slides** — a full-screen title card inserted at the start of each section. Say
-   that these add a few seconds each and interrupt the footage; labels and chapters usually
-   do the job without them.
+4. **Chapter titles on screen** — each chapter's name floats over the footage in a black
+   box (white text) for ~4 s at the chapter start (`"chapter_titles": true`). The audio
+   never stops and no time is added. **Recommend this**; offer full-screen section slides
+   only as the alternative, saying that slides insert a few silent seconds each and
+   interrupt the flow.
 5. **Sound level** — report the measured LUFS. If it is well below −16, recommend
    normalising and say how far off it is; if it is fine, say so and leave it out.
 6. **Floating captions** — a note over a moment of footage ("the menu moved in v4").
@@ -119,6 +121,7 @@ Write a `.json` file. Every key is optional; include only what was asked for.
 | `text` | Floating captions: `{"range": [start, stop], "text": "..."}`, optional `position` (`top`, `middle`, `bottom`; default `bottom`). |
 | `slides` | Full-screen cards **inserted** at a point: `{"at": time, "text": "..."}` or `{"at": time, "image": "/path.png"}`. These add to the running time. |
 | `chapters` | `{"at": time, "title": "..."}`. Produces real chapter markers plus a pasteable `0:00 Title` list. |
+| `chapter_titles` | `true` (or `{"seconds", "position", "color", "background", "font_size"}`): float each chapter's name over the footage at its start — black box, white text, top of frame, ~4 s. Adds no time; audio never stops. Prefer this over `slides`. `seconds` counts source footage: a cut moves the title to the surviving frame, a speed ramp over it compresses it. |
 | `toc_card` | `true` for a contents card at the start. Needs `chapters`. |
 | `audio` | `{"normalize": "ebu"}` for loudness, or `"peak"`. See below. |
 
@@ -172,8 +175,14 @@ own wording for anything technical; do not paste the transcript.
 **Guide** (instruction video): numbered steps, the exact command or menu path used, what
 the screen should show when it worked, a short troubleshooting table for anything that went
 wrong on camera — and **a screenshot at each step**, so the reader can compare their own
-screen to it. Screenshots come from the **source** video (the transcript's clock; the
-edited file has been cut and sped up) and go in a folder beside the document,
+screen to it. **Structure the document by the video's chapters**: one `##` heading per
+chapter, titled `M:SS — Chapter name` with the time and name taken *verbatim* from the
+pasteable chapter list (the dry run prints it — those are edited-video times, already
+computed), the steps as `###` under their chapter, and in the YAML header `toc: true` with
+`toc-depth: 2`, so the document's sidebar is exactly the video's table of contents and a
+reader can jump between the two. Screenshots come from the **source** video (the
+transcript's clock; the edited file has been cut and sped up) and go in a folder beside
+the document,
 `<name>-guide-img/step-02-download-rstudio.jpg`, one per step that changes what is on
 screen. A terminal step gets the terminal *after* the output appeared.
 
@@ -341,6 +350,7 @@ foreground instead and skip the log.
 |---|---|
 | Compensating for earlier cuts | Later ranges land in the wrong place. Always use original timestamps. |
 | A slide for every speed-up | Works, but pads the video and interrupts it. Use `speed[].label` instead. |
+| A slide for every chapter | Slides stop the audio and add time. `"chapter_titles": true` shows the same name without breaking the flow. |
 | Captioning footage you also cut | Rejected — the caption could never be seen. |
 | Two chapters inside one cut range | Rejected — they would collapse onto the same moment. |
 | `toc_card` with no `chapters` | Rejected. The card lists the chapters. |
@@ -381,6 +391,7 @@ vedit transcribe lecture.mp4 -o t.txt         # -> read it, propose chapters
   "chapters": [{"at": "1:30", "title": "Downloading R"},
                {"at": "6:10", "title": "Installing RStudio"},
                {"at": "13:30", "title": "First Quarto document"}],
+  "chapter_titles": true,
   "toc_card": true,
   "audio": {"normalize": "ebu", "target": -16}
 }

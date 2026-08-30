@@ -92,7 +92,22 @@ and ffmpeg's concat demuxer joins them.
 
 `output_time()` in `render.py` is the centre of gravity: captions and chapter marks are
 written in SOURCE time and must land at OUTPUT time after cuts, ramps, slides and the
-contents card. Its `after_slide` flag picks which side of a card a timestamp falls on —
+contents card. `chapter_titles` (2026-08-30) derives one Overlay per chapter at parse time
+(spec.py, after the sorts): the chapter's name floats in a solid black box, white text, top
+of frame, for 4 s or until the next chapter, whichever comes first — the unobtrusive
+replacement for per-section slides, which stop the audio and add time (Dave, after the
+first real run: "the inserted slides _really_ break up the flow"). Zero render-side code:
+derived overlays ride the ordinary `text` machinery, output-time mapping included. Three
+edges from the Codex round: the title starts at the **first surviving source instant** at
+or after the chapter (`first_surviving` walks the cuts), because a chapter inside cut
+footage validly snaps to the boundary while a fully-cut overlay fails `check_timeline` —
+without the shift, turning titles on rejected the spec; `false` is off and `{}` is
+all-defaults, but `0`/`""`/`[]` are errors, never a silent no-op; and `seconds` counts
+source footage, so a ramp over the chapter start compresses the title on screen. Derived
+titles are appended after user captions and the stable sort keeps them there, so at the
+same instant and position the chapter title draws on top. A chapter at 0:00 with a
+toc_card lands on the first footage frame, not on the card (`after_slide=True`). Its
+`after_slide` flag picks which side of a card a timestamp falls on —
 a caption belongs over the footage, a chapter mark on the card that introduces it. The
 duration estimate in `plan()` comes from the same function, so the two cannot disagree.
 

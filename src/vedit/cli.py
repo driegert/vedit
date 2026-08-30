@@ -18,6 +18,7 @@ EXAMPLE = {
               "position": "bottom"}],
     "chapters": [{"at": "0:00", "title": "Introduction"},
                  {"at": "8:00", "title": "Installing the toolchain"}],
+    "chapter_titles": True,
     "toc_card": True,
     "audio": {"normalize": "ebu", "target": -16},
 }

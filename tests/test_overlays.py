@@ -65,6 +65,83 @@ def test_a_caption_lands_in_its_own_window(tmp_path, media):
     assert before < 3, f"the picture changed before the window opened ({before:.1f})"
 
 
+def test_chapter_titles_float_at_each_chapter_start(tmp_path, media):
+    """chapter_titles derives one top-positioned overlay per chapter, ~4 s each."""
+    chapters = [{"at": "0:05", "title": "Part one"}, {"at": "0:15", "title": "Part two"}]
+    plain = render(tmp_path, media.video, {"chapters": chapters}, name="ct-plain.mp4")
+    titled = render(tmp_path, media.video,
+                    {"chapters": chapters, "chapter_titles": True}, name="ct-titled.mp4")
+
+    first = _band(plain, 6.0, "top") - _band(titled, 6.0, "top")
+    between = abs(_band(plain, 12.0, "top") - _band(titled, 12.0, "top"))
+    second = _band(plain, 16.0, "top") - _band(titled, 16.0, "top")
+    assert first > 20, f"no title at the first chapter start ({first:.1f})"
+    assert between < 3, f"a title outlived its window ({between:.1f})"
+    assert second > 20, f"no title at the second chapter start ({second:.1f})"
+    assert duration(titled) == pytest.approx(duration(plain), abs=0.02), "titles must add no time"
+
+
+def test_a_chapter_title_is_capped_at_the_next_chapter(tmp_path, media):
+    """Close chapters must not stack: the first title ends where the next chapter begins.
+
+    The first title is much wider than the second (drawtext centres its box), so a band
+    near the frame's left edge sees only the first title's box. At 10 s an UNCAPPED first
+    title (5-15 s) would darken that edge band; a capped one (5-7 s) leaves it alone —
+    this fails if the cap line is removed, which the old midline sample did not.
+    """
+    chapters = [{"at": "0:05", "title": "A very long first chapter title spanning nearly the whole frame width"},
+                {"at": "0:07", "title": "Two"}]
+    plain = render(tmp_path, media.video, {"chapters": chapters}, name="cap-plain.mp4")
+    titled = render(tmp_path, media.video,
+                    {"chapters": chapters, "chapter_titles": {"seconds": 10}}, name="cap-titled.mp4")
+
+    def edge(path, at):
+        # Inside the wide title's box (it spans nearly the frame), left of the short one's.
+        return region_mean(path, at, 40, 24, 150, 52)
+
+    during_first = edge(plain, 6.0) - edge(titled, 6.0)
+    at_ten = abs(edge(plain, 10.0) - edge(titled, 10.0))
+    mid_ten = _band(plain, 10.0, "top") - _band(titled, 10.0, "top")
+    assert during_first > 20, f"wide first title missing at its own start ({during_first:.1f})"
+    assert at_ten < 3, f"the first title was not capped at the next chapter ({at_ten:.1f})"
+    assert mid_ten > 20, f"second title missing ({mid_ten:.1f})"
+
+
+def test_a_chapter_inside_a_cut_gets_its_title_after_the_cut(tmp_path, media):
+    """A chapter in cut footage snaps to the boundary; its title must too, not fail."""
+    spec = {"cuts": [["0:10", "0:20"]],
+            "chapters": [{"at": "0:12", "title": "After the cut"}],
+            "chapter_titles": True}
+    plain = render(tmp_path, media.video, {"cuts": [["0:10", "0:20"]]}, name="cut-plain.mp4")
+    titled = render(tmp_path, media.video, spec, name="cut-titled.mp4")
+    # Source 20s is output 10s; the title covers output 10-14s.
+    inside = _band(plain, 11.0, "top") - _band(titled, 11.0, "top")
+    after = abs(_band(plain, 16.0, "top") - _band(titled, 16.0, "top"))
+    assert inside > 20, f"no title after the cut boundary ({inside:.1f})"
+    assert after < 3, f"the title ran long ({after:.1f})"
+
+
+def test_chapter_titles_off_and_defaults_forms(tmp_path, media):
+    """false is off, {} is all-defaults; both validate (dry runs, no render cost)."""
+    from util import run_vedit
+    base = {"chapters": [{"at": "0:05", "title": "A"}]}
+    for value in (False, {}):
+        spec = dict(base, chapter_titles=value)
+        proc = run_vedit(tmp_path, media.video, spec, tmp_path / "dry.mp4", "--dry-run")
+        assert proc.returncode == 0, f"chapter_titles={value!r}:\n{proc.stderr}"
+
+
+def test_chapter_titles_take_position_and_seconds(tmp_path, media):
+    spec = {"chapters": [{"at": "0:05", "title": "Bottom title"}],
+            "chapter_titles": {"position": "bottom", "seconds": 3}}
+    plain = render(tmp_path, media.video, {}, name="pos-plain.mp4")
+    titled = render(tmp_path, media.video, spec, name="pos-titled.mp4")
+    inside = _band(plain, 6.0, "bottom") - _band(titled, 6.0, "bottom")
+    after = abs(_band(plain, 9.0, "bottom") - _band(titled, 9.0, "bottom"))
+    assert inside > 20, f"no title at the bottom ({inside:.1f})"
+    assert after < 3, f"the title ran past its seconds ({after:.1f})"
+
+
 def test_a_caption_spanning_a_slide_is_not_drawn_over_the_card(tmp_path, media):
     """A caption whose range contains a card should pause for it, not cover it.
 

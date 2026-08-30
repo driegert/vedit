@@ -17,13 +17,14 @@ from pathlib import Path
 from . import VeditError
 from .media import MediaInfo
 
-TOP_LEVEL_KEYS = {"cuts", "speed", "slides", "text", "chapters", "toc_card", "audio", "notes"}
+TOP_LEVEL_KEYS = {"cuts", "speed", "slides", "text", "chapters", "chapter_titles", "toc_card", "audio", "notes"}
 SPEED_KEYS = {"range", "factor", "label"}      # "label" is optional
 SPEED_REQUIRED = {"range", "factor"}
 SLIDE_KEYS = {"at", "seconds", "text", "image", "background", "color", "font_size"}
 TEXT_KEYS = {"range", "text", "position", "color", "background", "font_size"}
 CHAPTER_KEYS = {"at", "title"}
 TOC_KEYS = {"seconds", "title", "background", "color", "font_size"}
+CHAPTER_TITLE_KEYS = {"seconds", "position", "color", "background", "font_size"}
 AUDIO_KEYS = {"normalize", "target"}
 
 POSITIONS = {"top", "middle", "bottom"}
@@ -365,6 +366,37 @@ def from_dict(raw, info: MediaInfo, *, origin: str = "spec") -> EditSpec:
         else:
             raise VeditError(f"toc_card: expected true or an object, got {toc!r}")
 
+    # chapter_titles: each chapter's name floats over the footage at its start —
+    # the unobtrusive alternative to a full-screen section slide, which stops the
+    # audio and adds time. Parsed here, derived into overlays after the sorts below
+    # (the cap at the next chapter needs the chapters in order).
+    titles_cfg = None
+    titles = raw.get("chapter_titles")
+    if titles is not None and titles is not False:
+        if titles is True:
+            titles = {}
+        # 0, "", [] are not "off" — false is. Reject them so a typo cannot silently
+        # disable the feature ({} is valid and means all defaults).
+        if not isinstance(titles, dict):
+            raise VeditError(f"chapter_titles: expected true or an object, got {titles!r}")
+        _reject_unknown(titles, CHAPTER_TITLE_KEYS, where="chapter_titles")
+        seconds = _number(titles.get("seconds", 4.0), where="chapter_titles.seconds")
+        if not 0 < seconds <= 60:
+            raise VeditError(f"chapter_titles.seconds: must be between 0 and 60 (got {seconds:g})")
+        position = str(titles.get("position", "top")).lower()
+        if position not in POSITIONS:
+            raise VeditError(
+                f"chapter_titles.position: {position!r} is not valid. Use one of {sorted(POSITIONS)}"
+            )
+        titles_cfg = {
+            "seconds": seconds,
+            "position": position,
+            # The video-editing convention: solid black box, white text.
+            "color": _color(titles.get("color", "white"), where="chapter_titles.color"),
+            "background": _color(titles.get("background", "black"), where="chapter_titles.background"),
+            "font_size": _font_size(titles.get("font_size"), where="chapter_titles.font_size"),
+        }
+
     audio = raw.get("audio")
     if audio is not None:
         if not isinstance(audio, dict):
@@ -396,6 +428,38 @@ def from_dict(raw, info: MediaInfo, *, origin: str = "spec") -> EditSpec:
 
     spec.slides.sort(key=lambda s: s.at)
     spec.chapters.sort(key=lambda c: c.at)
+
+    if titles_cfg is not None:
+        if not spec.chapters:
+            raise VeditError('chapter_titles needs "chapters" to title; add chapters or drop it')
+
+        # A chapter may sit inside cut footage (its marker snaps to the cut boundary),
+        # so the title starts at the first SURVIVING source instant at or after the
+        # chapter — otherwise a fully-cut title window would fail check_timeline and
+        # turning titles on would reject an otherwise valid spec.
+        def first_surviving(t: float) -> float:
+            moved = True
+            while moved:
+                moved = False
+                for lo, hi in spec.cuts:
+                    if lo <= t < hi:
+                        t = hi
+                        moved = True
+            return t
+
+        for chapter, following in zip(spec.chapters, list(spec.chapters[1:]) + [None]):
+            start = first_surviving(chapter.at)
+            stop = min(start + titles_cfg["seconds"], info.duration)
+            if following is not None:
+                stop = min(stop, following.at)  # titles never stack
+            if stop - start < 0.05:
+                continue
+            spec.overlays.append(Overlay(
+                start=start, stop=stop, text=chapter.title,
+                position=titles_cfg["position"], color=titles_cfg["color"],
+                background=titles_cfg["background"], font_size=titles_cfg["font_size"],
+            ))
+
     spec.overlays.sort(key=lambda o: o.start)
 
     if spec.toc_card is not None and not spec.chapters:
