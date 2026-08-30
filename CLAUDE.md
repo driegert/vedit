@@ -122,7 +122,7 @@ plausible-looking video that is not what was asked for. Prefer a clear error nam
 ### `vedit still`
 
 The same shape, one frame at a time, for the illustrated guide the `edit-video` skill
-writes: `{at, highlights[], dim, crop, grid, max_width}` → one ffmpeg command → a `.jpg`
+writes: `{at, highlights[], dim, crop, grid, max_width, pad}` → one ffmpeg command → a `.jpg`
 or `.png`. The invariant is the **output size**: `output_size()` computes it from the crop
 and `max_width`, `render()` measures the staged file with ffprobe and refuses to install a
 mismatch. Two rules keep the agent's job simple: coordinates are **always full-frame
@@ -131,6 +131,23 @@ outside an explicit crop is an error, not a silent omission. `grid: true` render
 labelled pixel grid for the measuring pass — the agent reads coordinates off it, then
 re-renders without it. An image input (by suffix) skips `at` and `-ss`.
 
+**`pad` (2026-08-30):** the named rectangle is inflated by `pad` px on every side before
+drawing (`Highlight.target` is what the spec said, `Highlight.rect` what is drawn,
+`Highlight.extent` the drawn rect clipped to the frame; default `max(6, min(w,h)/48)` ≈ 22
+at 1080p, top-level `pad` sets the default and each highlight may override). A box's `rect`
+*is* its extent — clamped, so the ring stays closed at a frame edge; an ellipse keeps its
+true centre and radii (`rect` may leave the frame, geq just never evaluates those pixels),
+because clamping the bounding box first squashed it into a different ellipse — Codex caught
+that on review. An ellipse is inscribed in the inflated rectangle, so its outline is `pad`
+px outside the target only at the four cardinal points. Motivation: the first real run on a 1080p screencast
+(`~/Videos/editing/windows_R_setup`) produced boxes of exactly the text's line height
+(`h: 24–28`) with zero tolerance, and four of them clipped their target by 5–15 px — a
+grid-read coordinate is good to about a dozen pixels, so hugging boxes clip on every such
+miss. Crop `margin` and the explicit-crop containment check use the extent (the error names
+both rectangles), the label sits above the padded rect, and for a nonzero pad the plan
+prints `pad N -> x y w h` (the extent). Tests pin `"pad": 0` on the geometry fixtures and cover the default,
+the override, edge clamping, and the plan/margin arithmetic.
+
 ## Testing
 
 ```bash
@@ -138,7 +155,7 @@ re-renders without it. An image input (by suffix) skips `at` and `-ss`.
 uv run pytest -k slides     # one area
 ```
 
-187 tests, a couple of minutes — they render real video through the actual CLI, so they catch
+200 tests, a couple of minutes — they render real video through the actual CLI, so they catch
 flag-composition bugs that unit tests would not. Fixtures (a 30s clip with audio, a 30s
 silent clip, a 900x900 RGBA image) are built by ffmpeg once per session in `tests/conftest.py`.
 

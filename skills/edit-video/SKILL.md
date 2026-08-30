@@ -243,10 +243,18 @@ last — so you measure once, on the frame you looked at, and never re-derive an
 3. **Look.** `read` the result. If the box misses the control, adjust `x`/`y` and re-run —
    it takes two seconds. Never embed a highlight you have not looked at.
 
+Give the control's own edges — where the text or button starts and stops — and let `pad`
+provide the breathing room; do not pre-widen `w`/`h` by guesswork. A coordinate read off
+the grid is good to about a dozen pixels, and the default pad absorbs that; if the result
+still clips one side, the coordinate on that side is off — fix it rather than growing the
+box. A box that clears its target by 20 px reads better than one that hugs it anyway: the
+job is to point at the control, not to frame it exactly.
+
 | Key | Meaning |
 |---|---|
 | `at` | The moment, in source time. Omit when the input is an image (`.jpg`/`.png`) rather than a video. |
-| `highlights[]` | `x`, `y`, `w`, `h` in full-frame pixels or percentages (`"40%"`); `shape` `box` (default) or `ellipse`; `color` (default `red`); `thickness`; `label` — a few words, drawn just above (or below) the shape. |
+| `highlights[]` | `x`, `y`, `w`, `h` in full-frame pixels or percentages (`"40%"`): the control's **own edges**, not a box around it. `shape` `box` (default) or `ellipse`; `color` (default `red`); `thickness`; `label` — a few words, drawn just above (or below) the shape. |
+| `pad` | How far the rectangle is inflated on every side before the outline is drawn (an ellipse is inscribed in the inflated rectangle). Top level or per highlight. Default ≈ 22 px at 1080p; raise it to 30–40 for a small control, or to draw the eye to a region rather than frame it exactly. |
 | `dim` | 0–0.95: darken everything *outside* the highlights. 0.3–0.5 is plenty. Needs `highlights`. |
 | `crop` | `{"margin": N}` — the highlights plus N pixels around them (start at 120–200, enough to recognise the window) — or explicit `{"x", "y", "w", "h"}`. Highlights must lie inside it; a crop that would remove one is rejected. |
 | `grid` | `true` (10 divisions) or 2–25. A measuring aid for you — never in the guide. |

@@ -30,9 +30,11 @@ STILL_EXAMPLE = {
         {"shape": "ellipse", "x": "15%", "y": "8%", "w": "8%", "h": "14%", "color": "yellow"},
     ],
     "dim": 0.4,
+    "pad": 20,
     "crop": {"margin": 80},
     "max_width": 1280,
-    "notes": "coordinates are full-frame pixels or percentages; measure them with grid: true",
+    "notes": "coordinates are full-frame pixels or percentages, measured with grid: true; "
+             "the outline is drawn pad pixels outside them",
 }
 
 

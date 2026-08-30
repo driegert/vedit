@@ -33,8 +33,8 @@ from .media import MediaInfo, ffmpeg, probe, run
 from .spec import _number, _reject_unknown, parse_time
 
 OUTPUT_SUFFIXES = {".jpg", ".jpeg", ".png"}
-TOP_LEVEL_KEYS = {"at", "highlights", "dim", "crop", "grid", "max_width", "notes"}
-HIGHLIGHT_KEYS = {"shape", "x", "y", "w", "h", "color", "thickness", "label"}
+TOP_LEVEL_KEYS = {"at", "highlights", "dim", "crop", "grid", "max_width", "pad", "notes"}
+HIGHLIGHT_KEYS = {"shape", "x", "y", "w", "h", "color", "thickness", "label", "pad"}
 RECT_KEYS = {"x", "y", "w", "h"}
 CROP_KEYS = RECT_KEYS | {"margin"}
 SHAPES = {"box", "ellipse"}
@@ -44,6 +44,7 @@ MAX_HIGHLIGHTS = 12    # a guide screenshot with more is unreadable; also bounds
 MIN_HIGHLIGHT = 4
 MIN_CROP = 16
 MAX_DIM = 0.95
+MAX_PAD = 400
 GRID_RGB = (255, 220, 0)
 GRID_LINE = 2
 
@@ -75,7 +76,13 @@ class Rect:
 @dataclass
 class Highlight:
     shape: str
-    rect: Rect
+    rect: Rect                              # what is drawn: the target grown by pad (a box is
+                                            # clamped to the frame so its ring stays closed; an
+                                            # ellipse keeps its true centre and radii and is
+                                            # simply not drawn where it leaves the frame)
+    extent: Rect                            # rect clipped to the frame: what can be seen
+    target: Rect                            # what the spec named
+    pad: int
     color: str
     rgb: tuple[int, int, int]
     thickness: int
@@ -216,6 +223,13 @@ def from_dict(raw, info: MediaInfo, *, origin: str = "spec") -> StillSpec:
         raise VeditError(f"highlights: at most {MAX_HIGHLIGHTS} per still (got {len(highlights)}); "
                          f"split the step into two screenshots")
     default_thickness = max(3, round(min(info.width, info.height) / 200))
+    # The outline is drawn *outside* the named rectangle. Coordinates read off a grid are
+    # good to a dozen pixels or so, and a box that hugs its target clips it on every such
+    # miss; a box standing off by ~22 px (at 1080p) survives the miss and reads better —
+    # it points at the control instead of framing it.
+    default_pad = max(6, round(min(info.width, info.height) / 48))
+    if raw.get("pad") is not None:
+        default_pad = _integer(raw["pad"], where="pad", low=0, high=MAX_PAD)
     for index, item in enumerate(highlights or []):
         where = f"highlights[{index}]"
         if not isinstance(item, dict):
@@ -225,7 +239,15 @@ def from_dict(raw, info: MediaInfo, *, origin: str = "spec") -> StillSpec:
         shape = str(item.get("shape", "box")).lower()
         if shape not in SHAPES:
             raise VeditError(f"{where}.shape: {shape!r} is not valid. Use one of {sorted(SHAPES)}")
-        rect = _rect(item, info, where=where, minimum=MIN_HIGHLIGHT)
+        target = _rect(item, info, where=where, minimum=MIN_HIGHLIGHT)
+        pad = default_pad
+        if item.get("pad") is not None:
+            pad = _integer(item["pad"], where=f"{where}.pad", low=0, high=MAX_PAD)
+        grown = Rect(target.x - pad, target.y - pad, target.w + 2 * pad, target.h + 2 * pad)
+        x0, y0 = max(0, grown.x), max(0, grown.y)
+        x1, y1 = min(info.width, grown.right), min(info.height, grown.bottom)
+        extent = Rect(x0, y0, x1 - x0, y1 - y0)
+        rect = extent if shape == "box" else grown
         color, rgb = _color(item.get("color", "red"), where=f"{where}.color")
         thickness = default_thickness
         if item.get("thickness") is not None:
@@ -242,8 +264,9 @@ def from_dict(raw, info: MediaInfo, *, origin: str = "spec") -> StillSpec:
                 raise VeditError(f"{where}.label: must not be empty; drop the key instead")
             if len(label) > 80:
                 raise VeditError(f"{where}.label: keep it under 80 characters (got {len(label)})")
-        spec.highlights.append(Highlight(shape=shape, rect=rect, color=color, rgb=rgb,
-                                         thickness=thickness, label=label))
+        spec.highlights.append(Highlight(shape=shape, rect=rect, extent=extent, target=target,
+                                         pad=pad, color=color, rgb=rgb, thickness=thickness,
+                                         label=label))
 
     if "dim" in raw:
         dim = _number(raw["dim"], where="dim")
@@ -267,7 +290,7 @@ def from_dict(raw, info: MediaInfo, *, origin: str = "spec") -> StillSpec:
             if not spec.highlights:
                 raise VeditError('crop.margin needs "highlights" to crop around')
             margin = _integer(crop["margin"], where="crop.margin", low=0, high=4000)
-            box = _bounding_box([h.rect for h in spec.highlights])
+            box = _bounding_box([h.extent for h in spec.highlights])
             x0, y0 = box.x - margin, box.y - margin
             x1, y1 = box.right + margin, box.bottom + margin
             clamped = x0 < 0 or y0 < 0 or x1 > info.width or y1 > info.height
@@ -279,12 +302,15 @@ def from_dict(raw, info: MediaInfo, *, origin: str = "spec") -> StillSpec:
         else:
             spec.crop = _rect(crop, info, where="crop", minimum=MIN_CROP)
             for index, highlight in enumerate(spec.highlights):
-                if not spec.crop.contains(highlight.rect):
+                if not spec.crop.contains(highlight.extent):
+                    r = highlight.extent
+                    grown = f" (grown by its pad of {highlight.pad} to {r.x},{r.y} {r.w}x{r.h})" \
+                        if highlight.pad else ""
                     raise VeditError(
-                        f"highlights[{index}] ({highlight.rect.x},{highlight.rect.y} "
-                        f"{highlight.rect.w}x{highlight.rect.h}) lies outside the crop "
+                        f"highlights[{index}] ({highlight.target.x},{highlight.target.y} "
+                        f"{highlight.target.w}x{highlight.target.h}){grown} lies outside the crop "
                         f"({spec.crop.x},{spec.crop.y} {spec.crop.w}x{spec.crop.h}) and would "
-                        f"not be visible. Enlarge the crop or move the highlight."
+                        f"not be visible. Enlarge the crop, move the highlight, or lower pad."
                     )
 
     grid = raw.get("grid")
@@ -452,9 +478,12 @@ def plan(spec: StillSpec, info: MediaInfo) -> list[str]:
         lines = [f"input      {info.path.name}  {info.width}x{info.height}  "
                  f"frame {spec.frame} at {spec.at:.3f}s"]
     for h in spec.highlights:
-        r = h.rect
-        lines.append(f"highlight  {h.shape:<8} x {r.x} y {r.y} w {r.w} h {r.h}  {h.color}"
-                     f"  thickness {h.thickness}" + (f"  {h.label!r}" if h.label else ""))
+        t, r = h.target, h.extent
+        line = f"highlight  {h.shape:<8} x {t.x} y {t.y} w {t.w} h {t.h}"
+        if h.pad:
+            line += f"  pad {h.pad} -> x {r.x} y {r.y} w {r.w} h {r.h}"
+        lines.append(line + f"  {h.color}  thickness {h.thickness}"
+                     + (f"  {h.label!r}" if h.label else ""))
     if spec.dim:
         lines.append(f"dim        {spec.dim:g} of the brightness removed outside the highlights")
     if spec.grid:

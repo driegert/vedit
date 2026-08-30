@@ -70,8 +70,12 @@ instruction video:
  "dim": 0.35, "crop": {"margin": 160}, "max_width": 1280}
 ```
 
-`highlights` are box or ellipse outlines with an optional label; `dim` darkens everything
-outside them; `crop` is an explicit rectangle or a `margin` around the highlights;
+`highlights` are box or ellipse outlines with an optional label, drawn on the rectangle
+given **inflated by `pad` pixels on every side** (default ≈ 22 px at 1080p — coordinates read
+off a grid are good to a dozen pixels, and a box that hugs its target clips it on every such
+miss; an ellipse is inscribed in the inflated rectangle);
+`dim` darkens everything outside them; `crop` is an explicit rectangle or a `margin` around
+the highlights;
 `max_width` downscales. `"grid": true` overlays a labelled pixel grid so a model can
 *read coordinates off the frame* before marking it. Coordinates are always full-frame
 pixels (or `"40%"`), even when cropping — the crop is applied last — and a highlight the

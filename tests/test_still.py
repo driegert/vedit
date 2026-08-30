@@ -37,10 +37,13 @@ PIX_TOL = 3
 
 # A flat solid-green patch of the 640x360 testsrc2 fixture at t=0 (verified by direct
 # sampling), used for the box highlight so the blue outline never blends into it.
-BOX = {"shape": "box", "x": 125, "y": 90, "w": 80, "h": 60, "thickness": 4, "color": "#0000ff"}
+BOX = {"shape": "box", "x": 125, "y": 90, "w": 80, "h": 60, "thickness": 4, "color": "#0000ff",
+       "pad": 0}
+DEFAULT_PAD = 8  # max(6, round(360 / 48)) for the 640x360 fixture
 
 # A flat solid-blue patch, used for the ellipse so a red outline stands out from it.
-ELLIPSE = {"shape": "ellipse", "x": 330, "y": 10, "w": 80, "h": 80, "thickness": 4, "color": "red"}
+ELLIPSE = {"shape": "ellipse", "x": 330, "y": 10, "w": 80, "h": 80, "thickness": 4, "color": "red",
+           "pad": 0}
 
 
 def run_still(workdir: Path, source: Path, spec: dict, out: Path,
@@ -93,7 +96,7 @@ BAD_SPECS = [
         lambda: {"at": 0, "highlights": [{"shape": "box", "x": 0, "y": 0, "w": 3, "h": 10}]}),
     ("thickness too thick",
         lambda: {"at": 0, "highlights": [{"shape": "box", "x": 0, "y": 0, "w": 10, "h": 10,
-                                          "thickness": 6}]}),
+                                          "thickness": 6, "pad": 0}]}),
     ("bad shape",
         lambda: {"at": 0, "highlights": [{"shape": "triangle", "x": 0, "y": 0, "w": 10, "h": 10}]}),
     ("bad colour name",
@@ -129,6 +132,15 @@ BAD_SPECS = [
                  "crop": {"x": 50, "y": 50, "w": 20, "h": 20}}),
     ("crop below the minimum size",
         lambda: {"at": 0, "crop": {"x": 0, "y": 0, "w": 10, "h": 10}}),
+    ("highlight inside an explicit crop but its pad outside it",
+        lambda: {"at": 0, "highlights": [{"shape": "box", "x": 50, "y": 50, "w": 20, "h": 20}],
+                 "crop": {"x": 48, "y": 48, "w": 24, "h": 24}}),
+    ("pad negative",
+        lambda: {"at": 0, "pad": -1, "highlights": [{"shape": "box", "x": 0, "y": 0, "w": 10, "h": 10}]}),
+    ("pad per highlight too large",
+        lambda: {"at": 0, "highlights": [{"shape": "box", "x": 0, "y": 0, "w": 10, "h": 10, "pad": 401}]}),
+    ("pad is not a whole number",
+        lambda: {"at": 0, "pad": 2.5, "highlights": [{"shape": "box", "x": 0, "y": 0, "w": 10, "h": 10}]}),
     ("grid too low",
         lambda: {"at": 0, "grid": 1}),
     ("grid too high",
@@ -155,7 +167,8 @@ BAD_SPEC_NEEDLES = [
     "too thick", "not valid", "not a colour", "alpha", "must not be empty",
     "under 80 characters", "must be a string", "at most 12", "nothing to leave bright",
     "must be between 0 and 0.95", "not both", "needs \"highlights\"", "outside the crop",
-    "at least 16x16", "whole number between 2 and 25", "whole number between 2 and 25",
+    "at least 16x16", "grown by its pad", "must be between 0 and 400", "must be between 0 and 400",
+    "whole number", "whole number between 2 and 25", "whole number between 2 and 25",
     "not a number", "must be between 64 and 8192", "boolean", "must be between 0% and 100%",
     "past the last frame", "boolean", "must be a JSON object",
 ]
@@ -303,6 +316,105 @@ def test_box_highlight_ring_and_interior(tmp_path, media):
     assert_rgb(pixel(out, 0, 500, 300), pixel(media.video, 0, 500, 300), msg="far from the box")
 
 
+# ---- pad: the outline stands off the named rectangle ------------------------------------
+
+def test_pad_draws_the_ring_outside_the_target_by_default(tmp_path, media):
+    r = {k: v for k, v in BOX.items() if k != "pad"}
+    blue = (0, 0, 255)
+    out = render_still(tmp_path, media.video, {"at": 0, "highlights": [r]})
+
+    p = DEFAULT_PAD
+    assert_rgb(pixel(out, 0, r["x"] - p, r["y"] - p), blue, msg="ring, pad px outside the target")
+    assert_rgb(pixel(out, 0, r["x"] + r["w"] - 1 + p, r["y"] + r["h"] - 1 + p), blue,
+               msg="ring, bottom-right, pad px outside")
+    for name, pt in {"target corner": (r["x"], r["y"]),
+                     "target edge": (r["x"] + r["w"] // 2, r["y"]),
+                     "outside the ring": (r["x"] - p - 1, r["y"] - p - 1)}.items():
+        assert_rgb(pixel(out, 0, *pt), pixel(media.video, 0, *pt), msg=name)
+
+
+def test_pad_can_be_set_per_still_and_per_highlight(tmp_path, media):
+    a = {k: v for k, v in BOX.items() if k != "pad"}
+    b = {"shape": "box", "x": 400, "y": 200, "w": 60, "h": 40, "thickness": 4, "color": "#0000ff",
+         "pad": 0}
+    out = render_still(tmp_path, media.video, {"at": 0, "pad": 12, "highlights": [a, b]})
+    blue = (0, 0, 255)
+    assert_rgb(pixel(out, 0, a["x"] - 12, a["y"] - 12), blue, msg="top-level pad applies")
+    assert_rgb(pixel(out, 0, a["x"], a["y"]), pixel(media.video, 0, a["x"], a["y"]),
+               msg="a's own corner untouched")
+    assert_rgb(pixel(out, 0, b["x"], b["y"]), blue, msg="per-highlight pad 0 overrides")
+
+
+def test_pad_is_clamped_at_the_frame_edge(tmp_path, media):
+    r = {"shape": "box", "x": 0, "y": 30, "w": 40, "h": 20, "thickness": 3, "color": "#0000ff",
+         "pad": 10}
+    out = render_still(tmp_path, media.video, {"at": 0, "highlights": [r]})
+    blue = (0, 0, 255)
+    assert_rgb(pixel(out, 0, 0, 20), blue, msg="ring hugs the left edge instead of going negative")
+    assert_rgb(pixel(out, 0, 49, 20), blue, msg="right edge still padded")
+
+
+def test_pad_clamps_at_the_right_and_bottom_edges_too(tmp_path, media):
+    r = {"shape": "box", "x": 600, "y": 330, "w": 40, "h": 30, "thickness": 3, "color": "#0000ff",
+         "pad": 10}
+    out = render_still(tmp_path, media.video, {"at": 0, "highlights": [r]})
+    blue = (0, 0, 255)
+    assert_rgb(pixel(out, 0, 639, 359), blue, msg="ring closes on the frame's last pixel")
+    assert_rgb(pixel(out, 0, 590, 320), blue, msg="top-left corner padded normally")
+
+
+def test_pad_grows_an_ellipse_without_moving_its_centre(tmp_path, media):
+    r = {k: v for k, v in ELLIPSE.items() if k != "pad"}
+    red = (255, 0, 0)
+    out = render_still(tmp_path, media.video, {"at": 0, "highlights": [r]})
+    p = DEFAULT_PAD
+    centre = (r["x"] + r["w"] // 2, r["y"] + r["h"] // 2)
+    assert_rgb(pixel(out, 0, r["x"] - p, centre[1]), red, msg="leftmost point moved out by pad")
+    assert_rgb(pixel(out, 0, r["x"], centre[1]), pixel(media.video, 0, r["x"], centre[1]),
+               msg="the target's own leftmost point is now inside the ring")
+    assert_rgb(pixel(out, 0, *centre), pixel(media.video, 0, *centre), msg="centre untouched")
+
+
+def test_a_padded_ellipse_at_the_frame_edge_keeps_its_shape(tmp_path, media):
+    # Grown by 10 the bounding box would start at y = -8; the ellipse must keep its centre
+    # (the leftmost point stays on the centre row) rather than be squashed into the frame.
+    r = {"shape": "ellipse", "x": 330, "y": 2, "w": 80, "h": 80, "thickness": 4, "color": "red",
+         "pad": 10}
+    out = render_still(tmp_path, media.video, {"at": 0, "highlights": [r]})
+    red = (255, 0, 0)
+    cy = r["y"] + r["h"] // 2
+    assert_rgb(pixel(out, 0, r["x"] - 10, cy), red, msg="leftmost point on the true centre row")
+    assert_rgb(pixel(out, 0, r["x"] - 10, cy - 12), pixel(media.video, 0, r["x"] - 10, cy - 12),
+               msg="a squashed ellipse would have put ring here")
+
+
+def test_explicit_crop_may_equal_the_padded_extent_exactly(tmp_path, media):
+    r = {k: v for k, v in BOX.items() if k != "pad"}
+    p = 9
+    crop = {"x": r["x"] - p, "y": r["y"] - p, "w": r["w"] + 2 * p, "h": r["h"] + 2 * p}
+    out = render_still(tmp_path, media.video, {"at": 0, "pad": p, "highlights": [r], "crop": crop})
+    assert resolution(out) == (crop["w"], crop["h"])
+    assert_rgb(pixel(out, 0, 0, 0), (0, 0, 255), msg="ring corner at the crop origin")
+
+
+def test_thickness_is_judged_against_the_padded_rectangle(tmp_path, media):
+    # 10x10 with thickness 6 is "too thick" unpadded (see BAD_SPECS); with the default pad
+    # the ring is drawn on a 26x26 rectangle and is fine.
+    r = {"shape": "box", "x": 100, "y": 100, "w": 10, "h": 10, "thickness": 6, "color": "#0000ff"}
+    out = render_still(tmp_path, media.video, {"at": 0, "highlights": [r]})
+    assert_rgb(pixel(out, 0, 100 - DEFAULT_PAD, 100 - DEFAULT_PAD), (0, 0, 255), msg="ring drawn")
+
+
+def test_pad_appears_in_the_plan_and_crop_margin_includes_it(tmp_path, media):
+    r = {k: v for k, v in BOX.items() if k != "pad"}
+    out_path = tmp_path / "out.png"
+    proc = run_still(tmp_path, media.video, {"at": 0, "highlights": [r], "pad": 9,
+                                             "crop": {"margin": 30}}, out_path)
+    assert proc.returncode == 0, proc.stderr
+    assert f"pad 9 -> x {r['x'] - 9} y {r['y'] - 9} w {r['w'] + 18} h {r['h'] + 18}" in proc.stderr
+    assert resolution(out_path) == (r["w"] + 2 * (30 + 9), r["h"] + 2 * (30 + 9))
+
+
 # ---- ellipse highlight: centre, leftmost point, and the untouched corner ----------------
 
 def test_ellipse_highlight_centre_edge_and_corner(tmp_path, media):
@@ -357,7 +469,7 @@ def test_crop_margin_boxes_the_highlights(tmp_path, media):
 
 def test_crop_margin_clamps_to_the_frame(tmp_path, media):
     margin = 30
-    corner_box = {"shape": "box", "x": 10, "y": 10, "w": 80, "h": 60, "color": "blue"}
+    corner_box = {"shape": "box", "x": 10, "y": 10, "w": 80, "h": 60, "color": "blue", "pad": 0}
     out_path = tmp_path / "out.png"
     proc = run_still(tmp_path, media.video,
                      {"at": 0, "highlights": [corner_box], "crop": {"margin": margin}}, out_path)
@@ -402,7 +514,7 @@ def test_grid_true_means_ten_divisions(tmp_path, media):
 
 def test_percentage_coordinates_resolve_against_the_frame(tmp_path, media):
     spec = {"at": 0, "highlights": [{"shape": "box", "x": "50%", "y": "25%", "w": "10%",
-                                     "h": "10%", "color": "lime", "thickness": 3}]}
+                                     "h": "10%", "color": "lime", "thickness": 3, "pad": 0}]}
     out = render_still(tmp_path, media.video, spec)
     # 50% of 640 = 320, 25% of 360 = 90: the box's top-left corner, forced to lime.
     assert_rgb(pixel(out, 0, 320, 90), (0, 255, 0), msg="percentage-positioned ring")
