@@ -56,7 +56,21 @@ is on screen during them, the measured loudness, the duration — and ask which 
 user wants. If you have a structured question tool (`ask_user` in pi, `AskUserQuestion`
 in Claude Code), use it as a **multi-select**, one option per item with the finding in
 its description; otherwise a numbered list in prose. Either way: one question, then
-wait; do not render anything yet.
+wait; do not render anything yet. In pi the call is literally
+
+```
+ask_user({
+  question: "Which edits do you want?",
+  multi: true,
+  options: [
+    { label: "Speed up the dead air (labelled)", description: "RStudio 5:33-7:30, Positron 8:05-10:16, ... 11.5 min becomes ~70 s" },
+    { label: "Trim the start and end", description: "3.3 s before the first word, 4.8 s after the last" }
+  ]
+})
+```
+
+— `multi: true` is a parameter, not a word in the question; without it the user gets a
+single pick and can choose only one edit.
 
 1. **Speed up the dead air** — 10x for any silence longer than 30 seconds (waits,
    downloads, installs), 5x for everything shorter, listing them with original times. With a floating label over each
