@@ -75,8 +75,9 @@ wait; do not render anything yet.
 7. **A written companion** (`.qmd`) — from the transcript: a **step-by-step guide with a
    screenshot at each step** (the control to click boxed and zoomed in on) if it is an
    instruction video, a **detailed summary** if it is a lecture (see "Written companion").
-8. **A Blackboard embed** — upload the finished file to the video host and emit
-   a paste-ready player snippet (`vedit snippet`) with the chapter navigation inlined.
+8. **A Blackboard embed** — a paste-ready player snippet (`vedit snippet`) with the
+   chapter navigation inlined, plus the upload command for the video host. The upload
+   itself waits until the user has reviewed the render (see "Publishing").
    Worth offering only when item 3 (chapters) is also taken.
 9. **Other one-offs** — an audio-only export (`.m4a`) for listening, a still frame for a
    thumbnail, a smaller re-encoded copy for sharing. These are plain `ffmpeg` on the
@@ -240,15 +241,7 @@ mark it and, usually, crop to it. `vedit still` does both from the same spec. Co
 are always **full-frame pixels** (or percentages), even when cropping — the crop is applied
 last — so you measure once, on the frame you looked at, and never re-derive anything.
 
-1. **Measure.** Re-grab the frame with a labelled pixel grid and `read` it:
-   ```bash
-   echo '{"at": 149, "grid": true}' | vedit still lecture.mp4 - -o grid_149.jpg
-   ```
-   Lines fall every tenth of the frame and each carries its pixel coordinate, so a button
-   sitting between the `1152` and `1344` lines and just under the `648` line is at about
-   `x 1210, y 690`. For a small control use `"grid": 20`, or crop first and grid the crop
-   (the labels stay full-frame).
-2. **Mark.** Write the spec, `step-02.json`, and run it:
+1. **Mark.** Write the spec, `step-02.json`, and run it:
    ```json
    {"at": 149,
     "highlights": [{"x": 1212, "y": 688, "w": 140, "h": 48, "label": "Click DOWNLOAD RSTUDIO"}],
@@ -257,8 +250,19 @@ last — so you measure once, on the frame you looked at, and never re-derive an
    ```bash
    vedit still lecture.mp4 step-02.json -o lecture-guide-img/step-02-download-rstudio.jpg
    ```
-3. **Look.** `read` the result. If the box misses the control, adjust `x`/`y` and re-run —
-   it takes two seconds. Never embed a highlight you have not looked at.
+   Estimate `x`/`y` as best you can — the next step measures them properly. (When you have
+   no idea where the control is, grab the frame with only the grid first:
+   `echo '{"at": 149, "grid": true}' | vedit still lecture.mp4 - -o grid_149.jpg`.)
+2. **Look at the `.check` twin, not the clean file.** Every run with highlights also wrote
+   `step-02-download-rstudio.check.jpg`: the same still with the labelled pixel grid drawn
+   over your boxes. `read` it. Grid lines fall every tenth of the frame and carry their
+   full-frame pixel coordinate, so if the box missed, the correct values are in the same
+   picture — a control between the `1152` and `1344` lines and just under the `648` line
+   is at about `x 1210, y 690`. Fix the spec from the labels, re-run, look again. One
+   correction is normal; a second guess without reading the grid is how boxes end up on
+   the wrong button.
+3. **Embed the clean file.** The `.check` twin is a measuring aid for you — it never
+   appears in the guide.
 
 Give the control's own edges — where the text or button starts and stops — and let `pad`
 provide the breathing room; do not pre-widen `w`/`h` by guesswork. A coordinate read off
@@ -274,7 +278,7 @@ job is to point at the control, not to frame it exactly.
 | `pad` | How far the rectangle is inflated on every side before the outline is drawn (an ellipse is inscribed in the inflated rectangle). Top level or per highlight. Default ≈ 22 px at 1080p; raise it to 30–40 for a small control, or to draw the eye to a region rather than frame it exactly. |
 | `dim` | 0–0.95: darken everything *outside* the highlights. 0.3–0.5 is plenty. Needs `highlights`. |
 | `crop` | `{"margin": N}` — the highlights plus N pixels around them (start at 120–200, enough to recognise the window) — or explicit `{"x", "y", "w", "h"}`. Highlights must lie inside it; a crop that would remove one is rejected. |
-| `grid` | `true` (10 divisions) or 2–25. A measuring aid for you — never in the guide. |
+| `grid` | `true` (10 divisions) or 2–25. A measuring aid for you — never in the guide. Rarely needed by hand: any run with `highlights` writes a gridded `.check` twin beside the output automatically (an explicit `grid` suppresses the twin). |
 | `max_width` | Downscale the result; 1280 is plenty for HTML. Never upscales. |
 
 One thing per screenshot: one highlight, or two numbered labels (`"1. Open File"`,
@@ -301,12 +305,13 @@ fix **only the reported lines** with `edit` — never write the file again from 
 regenerated file reproduces its own mistakes, and seeing the same report twice means you
 are in exactly that loop.
 
-**Do not delete anything until the end.** The survey frames, contact sheets, grids,
-candidate stills, `scenes.txt`, and render logs cost nothing while they sit there, and
-they are your evidence if a screenshot or chapter needs revisiting. Clean them up as the
-**last** step, after the render duration matched the estimate, the guide lints clean, and
-(if quarto is installed) `quarto render` succeeded — and delete only files you created:
-`rm -f` with explicit names or narrow globs, never a directory.
+**Do not delete anything — even at the end.** The survey frames, contact sheets, grids,
+`.check` twins, candidate stills, `scenes.txt`, and render logs cost nothing while they
+sit there, and they are the evidence if a screenshot or chapter needs revisiting once the
+user watches the result. When everything is verified, your final report **names** what can
+be cleaned up (only files you created: explicit names or narrow globs, never a directory)
+and says it is waiting on their review — delete only when the user has looked at the work
+and says so.
 
 ## Step 5 — dry run, always
 
@@ -349,13 +354,20 @@ foreground instead and skip the log.
 
 ## Publishing — the Blackboard snippet
 
-If the user took the Blackboard embed option (or asks later), publish the *finished* file:
+If the user took the Blackboard embed option (or asks later), prepare the pieces —
+but **the upload waits until the user has reviewed the render**. Emit the snippet with
+the intended URL, print the upload command, and say both are ready once they have
+watched the result:
 
 ```bash
-rclone copyto lecture-edited.mp4 <remote>:videos/<course>/<name>.mp4
 vedit snippet lecture-edited.mp4 --url "https://<video-host>/<course>/<name>.mp4" \
   -o lecture-snippet.html
+# after the user has reviewed the render and said to publish:
+rclone copyto lecture-edited.mp4 <remote>:videos/<course>/<name>.mp4
 ```
+
+Run the upload yourself only when the user has already seen the render and asks for the
+embed — a publish is outward-facing and theirs to trigger.
 
 The rclone remote name and the public base URL are machine configuration, not part of
 this skill — if you do not know them, ask the user (or check their notes) rather than
@@ -388,10 +400,12 @@ command — do not try to configure credentials yourself.
 | A guide as `.md` | The companion is a `.qmd` with a YAML header; the screenshots need a folder beside it. |
 | Chapters re-typed into an embed | `vedit snippet` reads them from the rendered file; regenerate, never hand-edit the base64. |
 | Re-measuring highlight coordinates after a crop | Coordinates are always full-frame; the crop is applied last. Measure once, on the gridded full frame. |
-| A gridded frame in the guide | The grid is for you. Render the embedded file without `grid`. |
-| A highlight nobody looked at | Off by a hundred pixels it boxes the wrong button. `read` every annotated still before embedding it. |
+| A gridded frame or a `.check` file in the guide | The grid is for you. Embed the clean output; the `.check` twin stays out. |
+| A highlight nobody looked at | Off by a hundred pixels it boxes the wrong button. `read` the `.check` twin of every annotated still before embedding the clean one. |
+| Fixing a missed box by trial and error | The `.check` twin already shows the answer: read the grid labels beside the control and set `x`/`y` once. |
 | Rewriting the `.qmd` when the linter reports issues | The rewrite reproduces them. `edit` the reported lines, nothing else. |
-| Cleaning up before everything is verified | Survey frames and logs are your evidence. Delete them last, by name, after lint + render pass. |
+| Deleting working files as a routine last step | Nothing is deleted by default. Name what can go in the report and wait for the user to review and ask. |
+| Uploading to the video host before the user has reviewed the render | Emit the snippet and print the upload command; the upload itself is the user's call. |
 | Composing `ffmpeg drawbox`/`crop` by hand | `vedit still` does it from a spec, checks the highlight is inside the crop, and verifies the output size. |
 | Five `read`s in one turn | Each is 1–2.5k tokens and you will mix up which picture was which. One or two per turn, and say what each showed. |
 | Looking back at an old frame | Once six newer images have arrived it is a placeholder. The note you wrote when you looked is what remains — so write it then. |
@@ -430,6 +444,6 @@ vedit apply lecture.mp4 edits.json -o lecture-edited.mp4             # render
 
 Had the user also ticked the guide: start that render with `nohup … &`, list the screen
 changes, and for each step of the transcript grab and `read` the frame after its change —
-gridding, boxing and cropping the ones that are about a single control — writing
+boxing and cropping the ones that are about a single control (each checked against its `.check` twin) — writing
 `lecture-guide.qmd` and `lecture-guide-img/` while the render runs; then collect the render
 log and report both.

@@ -599,3 +599,43 @@ def test_a_failed_still_render_leaves_no_debris(tmp_path, media):
     assert "Traceback" not in proc.stderr
     assert not out.exists()
     assert not list(tmp_path.rglob(".vedit-*")), "a staging file was left behind"
+
+
+# ---- the .check measuring twin --------------------------------------------------------
+#
+# Every render with highlights (and no explicit grid) writes `<stem>.check<suffix>`
+# beside the output: the same still with the labelled coordinate grid drawn over the
+# highlights, so the verification read doubles as the measuring pass. The clean file
+# is what gets embedded; the twin exists so a missed box can be corrected from the
+# grid labels instead of by trial and error.
+
+GRID_RGB = (255, 220, 0)  # still_mod.GRID_RGB
+
+
+def test_highlights_write_a_gridded_check_twin(media, tmp_path):
+    out = tmp_path / "step.png"
+    proc = run_still(tmp_path, media.video, {"at": 1, "highlights": [BOX]}, out)
+    assert proc.returncode == 0, proc.stderr
+    check = tmp_path / "step.check.png"
+    assert check.exists(), "no .check twin was written"
+    assert "step.check.png" in proc.stderr
+    assert resolution(check) == resolution(out)
+    # The vertical grid line at x=192 (640/10 * 3) crosses the BOX interior; y=120 is
+    # clear of the ring (border 125..129), the horizontal line at 108..109, and every
+    # label. On the twin that pixel is grid-coloured; on the clean file it is the flat
+    # green testsrc2 patch under the box.
+    assert_rgb(pixel(check, 0, 192, 120), GRID_RGB)
+    clean = pixel(out, 0, 192, 120)
+    assert max(abs(a - b) for a, b in zip(clean, GRID_RGB)) > 3 * PIX_TOL
+
+
+def test_no_check_twin_without_highlights_or_with_explicit_grid(media, tmp_path):
+    plain = tmp_path / "plain.png"
+    proc = run_still(tmp_path, media.video, {"at": 1}, plain)
+    assert proc.returncode == 0, proc.stderr
+    assert not (tmp_path / "plain.check.png").exists()
+
+    gridded = tmp_path / "gridded.png"
+    proc = run_still(tmp_path, media.video, {"at": 1, "highlights": [BOX], "grid": True}, gridded)
+    assert proc.returncode == 0, proc.stderr
+    assert not (tmp_path / "gridded.check.png").exists()

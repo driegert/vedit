@@ -169,6 +169,14 @@ def _cmd_still(args) -> int:
     still_mod.render(info, spec, out)
     width, height = still_mod.output_size(spec, info)
     print(f"wrote {out} ({width}x{height})", file=sys.stderr)
+    if spec.highlights and not spec.grid:
+        from dataclasses import replace
+        check = out.with_name(f"{out.stem}.check{out.suffix}")
+        still_mod.render(info, replace(spec, grid=still_mod.DEFAULT_GRID), check)
+        print(f"wrote {check} -- the measuring copy: the same still with the labelled "
+              f"pixel grid over your highlights. read THIS file to verify the boxes "
+              f"(the grid labels give the corrected x/y if one missed); embed only "
+              f"{out.name}.", file=sys.stderr)
     print(out)
     return 0
 

@@ -13,7 +13,7 @@ vedit example                                            # print a starter spec
 vedit apply lecture.mp4 edits.json -o out.mp4 --dry-run  # resolve times, estimate, no render
 vedit apply lecture.mp4 edits.json -o out.mp4            # render
 vedit transcribe lecture.mp4 -o transcript.txt           # [m:ss] one line per sentence
-vedit still lecture.mp4 still.json -o step.jpg           # one frame: highlights, dim, crop, grid
+vedit still lecture.mp4 still.json -o step.jpg           # one frame: highlights, dim, crop, grid (+ gridded .check twin)
 vedit example --still                                    # a starter still spec
 vedit snippet out.mp4 --url https://videos.example.org/x.mp4  # paste-ready LMS embed HTML
 uv tool install --editable .                             # reinstall after changing code
@@ -77,6 +77,7 @@ Also established empirically, and just as expensive to rediscover:
 
 | The `color` lavfi source hands out `253,0,0` for `red` | It negotiates YUV and converts back. `still.rgb_of` appends `,format=rgb24` to the source so the triple is exact — it resolves *any* ffmpeg colour name by asking ffmpeg, and an unknown name fails there |
 | `drawbox`/`drawgrid` take YUV only, and there is no ellipse filter | `still.py` draws every outline, the dim and the grid lines in one `geq` pass in rgb24 — one colour space until the encoder. ~1.5–3 s per 1080p still, all cores |
+| A model writes highlight coordinates blind and fixes misses by trial and error (observed: seven attempts on one still, the grid grabbed only afterwards) | every `still` run with `highlights` also writes a gridded `.check` twin beside the output, so the verification read doubles as the measuring pass; an explicit `grid` suppresses the twin (the main output already carries it) |
 | A `drawtext` `x=`/`y=` expression containing a comma breaks option parsing | `No option name near '…'` — quote them: `x='max(7,min(700,w-tw-7))'` |
 | `drawtext` runs before `crop`, so a label clamped to the *frame* can be cropped off | Label placement in `_label_filters` clamps to the crop rectangle when there is one |
 | `ffprobe` gives a JPEG a 0.04 s duration (`image2`) but a PNG/WebP/BMP (`*_pipe`) none at all | `media.probe(still=True)` lets a missing duration through for pictures and sets `MediaInfo.is_image` from the format name — checked on JPEG only at first, and every PNG *output* failed its post-render measurement (Codex caught it) |

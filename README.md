@@ -62,7 +62,7 @@ error: speed[0].factor: must be greater than 0 (got 0). Use a value above 1 to s
 
 `vedit still` grabs one frame from a video (or takes an existing image) and draws the
 reader's eye to part of it — for the step-by-step guide an agent writes alongside an
-instruction video:
+instruction video: When a spec has `highlights`, a second file `<name>.check.jpg` is written beside the output — the same still with a labelled coordinate grid over the boxes, for verifying and correcting their placement; embed the clean one.
 
 ```json
 {"at": 149,
