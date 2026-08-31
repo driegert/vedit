@@ -184,7 +184,11 @@ chapter, titled `M:SS — Chapter name` with the time and name taken *verbatim* 
 pasteable chapter list (the dry run prints it — those are edited-video times, already
 computed), the steps as `###` under their chapter, and in the YAML header `toc: true` with
 `toc-depth: 2`, so the document's sidebar is exactly the video's table of contents and a
-reader can jump between the two. Screenshots come from the **source** video (the
+reader can jump between the two. **Number the steps once, continuously, across the
+whole document** — `### Step 1 — …` through `### Step N — …`, the number written into
+the heading text, never restarting at 1 under a new chapter heading. (Markdown ordered
+lists renumber at every break, which is exactly why the numbers live in the headings —
+and they then match the `step-NN` image file names.) Screenshots come from the **source** video (the
 transcript's clock; the edited file has been cut and sped up) and go in a folder beside
 the document,
 `<name>-guide-img/step-02-download-rstudio.jpg`, one per step that changes what is on
@@ -263,6 +267,13 @@ last — so you measure once, on the frame you looked at, and never re-derive an
    the wrong button.
 3. **Embed the clean file.** The `.check` twin is a measuring aid for you — it never
    appears in the guide.
+
+Every render also writes the spec back beside the image — `step-02-download-rstudio.json`,
+with `source` and `output` recorded — and the sidecar is itself a valid spec. That is
+each screenshot's recipe: to tweak one later, edit the sidecar and re-run
+`vedit still lecture.mp4 lecture-guide-img/step-02-download-rstudio.json -o lecture-guide-img/step-02-download-rstudio.jpg`.
+The sidecars are part of the guide's working set — keep them with the images, never
+list them among the deletable working files.
 
 Give the control's own edges — where the text or button starts and stops — and let `pad`
 provide the breathing room; do not pre-widen `w`/`h` by guesswork. A coordinate read off
@@ -403,6 +414,8 @@ command — do not try to configure credentials yourself.
 | A gridded frame or a `.check` file in the guide | The grid is for you. Embed the clean output; the `.check` twin stays out. |
 | A highlight nobody looked at | Off by a hundred pixels it boxes the wrong button. `read` the `.check` twin of every annotated still before embedding the clean one. |
 | Fixing a missed box by trial and error | The `.check` twin already shows the answer: read the grid labels beside the control and set `x`/`y` once. |
+| Step numbers restarting at 1 in each chapter | One counter for the whole guide: `Step 1`–`Step N` in the `###` headings, continuing across chapter headings. |
+| The `.json` sidecars listed as deletable clutter | Each is a screenshot's recipe, written automatically by `still`. They stay beside the images. |
 | Rewriting the `.qmd` when the linter reports issues | The rewrite reproduces them. `edit` the reported lines, nothing else. |
 | Deleting working files as a routine last step | Nothing is deleted by default. Name what can go in the report and wait for the user to review and ask. |
 | Uploading to the video host before the user has reviewed the render | Emit the snippet and print the upload command; the upload itself is the user's call. |

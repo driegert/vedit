@@ -62,7 +62,7 @@ error: speed[0].factor: must be greater than 0 (got 0). Use a value above 1 to s
 
 `vedit still` grabs one frame from a video (or takes an existing image) and draws the
 reader's eye to part of it — for the step-by-step guide an agent writes alongside an
-instruction video: When a spec has `highlights`, a second file `<name>.check.jpg` is written beside the output — the same still with a labelled coordinate grid over the boxes, for verifying and correcting their placement; embed the clean one.
+instruction video: When a spec has `highlights`, a second file `<name>.check.jpg` is written beside the output — the same still with a labelled coordinate grid over the boxes, for verifying and correcting their placement; embed the clean one. Every render also writes a sidecar beside the image — `step-02.jpg` gets `step-02.json`: the spec as given plus `source` and `output` — and the sidecar is itself a valid spec, so any screenshot can be tweaked later by editing it and re-running `vedit still src.mp4 step-02.json -o step-02.jpg`.
 
 ```json
 {"at": 149,

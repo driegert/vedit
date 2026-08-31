@@ -639,3 +639,48 @@ def test_no_check_twin_without_highlights_or_with_explicit_grid(media, tmp_path)
     proc = run_still(tmp_path, media.video, {"at": 1, "highlights": [BOX], "grid": True}, gridded)
     assert proc.returncode == 0, proc.stderr
     assert not (tmp_path / "gridded.check.png").exists()
+
+
+# ---- the sidecar: the spec written back beside each rendered image ----------------------
+
+def run_still_spec_file(workdir: Path, source: Path, spec_path: Path, out: Path,
+                        *extra: str) -> subprocess.CompletedProcess:
+    """Like run_still, but with the spec already on disk (e.g. a sidecar)."""
+    return subprocess.run(
+        [sys.executable, "-m", "vedit.cli", "still", str(source), str(spec_path),
+         "-o", str(out), *extra],
+        capture_output=True, text=True,
+    )
+
+
+def test_sidecar_written_and_reproduces_the_still(media, tmp_path):
+    out = tmp_path / "step.png"
+    spec = {"at": 1, "highlights": [BOX], "dim": 0.2}
+    proc = run_still(tmp_path, media.video, spec, out)
+    assert proc.returncode == 0, proc.stderr
+    sidecar = tmp_path / "step.json"
+    assert sidecar.exists(), "no sidecar beside the output"
+    assert "step.json" in proc.stderr
+    record = json.loads(sidecar.read_text())
+    assert record["at"] == 1
+    assert record["highlights"] == [BOX]
+    assert record["dim"] == 0.2
+    assert record["source"] == str(media.video)
+    assert record["output"] == str(out)
+    assert not (tmp_path / "step.check.json").exists(), "the .check twin gets no sidecar"
+
+    # The sidecar is itself a valid spec (source/output are accepted-and-ignored) and
+    # reproduces the image byte-for-byte.
+    again = tmp_path / "again.png"
+    proc2 = run_still_spec_file(tmp_path, media.video, sidecar, again)
+    assert proc2.returncode == 0, proc2.stderr
+    assert again.read_bytes() == out.read_bytes()
+
+
+def test_sidecar_does_not_clobber_a_spec_at_its_own_path(media, tmp_path):
+    # run_still writes the spec to <workdir>/spec.json; naming the output spec.png makes
+    # that very file the sidecar path. The hand-written spec must survive untouched.
+    spec = {"at": 1, "highlights": [BOX]}
+    proc = run_still(tmp_path, media.video, spec, tmp_path / "spec.png")
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads((tmp_path / "spec.json").read_text()) == spec

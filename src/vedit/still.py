@@ -33,7 +33,11 @@ from .media import MediaInfo, ffmpeg, probe, run
 from .spec import _number, _reject_unknown, parse_time
 
 OUTPUT_SUFFIXES = {".jpg", ".jpeg", ".png"}
-TOP_LEVEL_KEYS = {"at", "highlights", "dim", "crop", "grid", "max_width", "pad", "notes"}
+# "source" and "output" are metadata the cli writes back into each still's sidecar (the
+# spec saved beside the rendered image); accepted and ignored here so a sidecar is itself
+# a valid spec.
+TOP_LEVEL_KEYS = {"at", "highlights", "dim", "crop", "grid", "max_width", "pad", "notes",
+                  "source", "output"}
 HIGHLIGHT_KEYS = {"shape", "x", "y", "w", "h", "color", "thickness", "label", "pad"}
 RECT_KEYS = {"x", "y", "w", "h"}
 CROP_KEYS = RECT_KEYS | {"margin"}

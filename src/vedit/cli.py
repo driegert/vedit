@@ -136,19 +136,27 @@ def _cmd_apply(args) -> int:
     return 0
 
 
-def _load_still_spec(path: str, info: media.MediaInfo) -> still_mod.StillSpec:
+def _load_still_spec(path: str, info: media.MediaInfo) -> tuple[still_mod.StillSpec, dict]:
+    """Parse the spec, returning the raw dict too (the sidecar re-serializes it verbatim)."""
     if path == "-":
         try:
             raw = json.load(sys.stdin)
         except json.JSONDecodeError as exc:
             raise VeditError(f"stdin is not valid JSON: {exc}") from None
-        return still_mod.from_dict(raw, info, origin="stdin")
-    return still_mod.load(path, info)
+        return still_mod.from_dict(raw, info, origin="stdin"), raw
+    p = Path(path)
+    if not p.exists():
+        raise VeditError(f"spec file does not exist: {p}")
+    try:
+        raw = json.loads(p.read_text())
+    except json.JSONDecodeError as exc:
+        raise VeditError(f"{p.name} is not valid JSON: {exc}") from None
+    return still_mod.from_dict(raw, info, origin=p.name), raw
 
 
 def _cmd_still(args) -> int:
     info = media.probe(args.input, still=True)
-    spec = _load_still_spec(args.spec, info)
+    spec, raw_spec = _load_still_spec(args.spec, info)
     out = Path(args.output)
     if out.suffix.lower() not in still_mod.OUTPUT_SUFFIXES:
         raise VeditError(f"write a .jpg or .png (got {out.name})")
@@ -177,6 +185,20 @@ def _cmd_still(args) -> int:
               f"pixel grid over your highlights. read THIS file to verify the boxes "
               f"(the grid labels give the corrected x/y if one missed); embed only "
               f"{out.name}.", file=sys.stderr)
+
+    # The sidecar: the spec written back beside the image, with the source and output
+    # recorded, so every screenshot stays reproducible and tweakable. Skipped when the
+    # spec argument already *is* the sidecar (re-running from one must not rewrite it
+    # mid-read); "source"/"output" are accepted-and-ignored keys, so it is a valid spec.
+    sidecar = out.with_name(f"{out.stem}.json")
+    if args.spec == "-" or Path(args.spec).resolve() != sidecar.resolve():
+        record = dict(raw_spec)
+        record["source"] = args.input
+        record["output"] = str(out)
+        sidecar.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+        print(f"wrote {sidecar} -- this still's recipe (spec + source). to tweak the "
+              f"shot later, edit it and re-run: vedit still {args.input} {sidecar} "
+              f"-o {out}", file=sys.stderr)
     print(out)
     return 0
 

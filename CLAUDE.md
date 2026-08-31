@@ -13,7 +13,7 @@ vedit example                                            # print a starter spec
 vedit apply lecture.mp4 edits.json -o out.mp4 --dry-run  # resolve times, estimate, no render
 vedit apply lecture.mp4 edits.json -o out.mp4            # render
 vedit transcribe lecture.mp4 -o transcript.txt           # [m:ss] one line per sentence
-vedit still lecture.mp4 still.json -o step.jpg           # one frame: highlights, dim, crop, grid (+ gridded .check twin)
+vedit still lecture.mp4 still.json -o step.jpg           # one frame: highlights, dim, crop, grid (+ .check twin, .json sidecar)
 vedit example --still                                    # a starter still spec
 vedit snippet out.mp4 --url https://videos.example.org/x.mp4  # paste-ready LMS embed HTML
 uv tool install --editable .                             # reinstall after changing code
@@ -147,7 +147,7 @@ mismatch. Two rules keep the agent's job simple: coordinates are **always full-f
 pixels** (or `"NN%"`) even when cropping, because the crop is applied last; and a highlight
 outside an explicit crop is an error, not a silent omission. `grid: true` renders a
 labelled pixel grid for the measuring pass — the agent reads coordinates off it, then
-re-renders without it. An image input (by suffix) skips `at` and `-ss`.
+re-renders without it. An image input (by suffix) skips `at` and `-ss`. Every successful render writes the spec back as a **sidecar** (`step.jpg` → `step.json`, the raw spec plus `source`/`output` metadata keys the parser accepts and ignores, so a sidecar is itself a valid spec) for later reproduction or tweaking; the write is skipped when the spec argument already *is* the sidecar, and the `.check` twin gets none.
 
 **`pad` (2026-08-30):** the named rectangle is inflated by `pad` px on every side before
 drawing (`Highlight.target` is what the spec said, `Highlight.rect` what is drawn,
