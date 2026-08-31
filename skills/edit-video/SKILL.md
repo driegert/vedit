@@ -58,8 +58,8 @@ in Claude Code), use it as a **multi-select**, one option per item with the find
 its description; otherwise a numbered list in prose. Either way: one question, then
 wait; do not render anything yet.
 
-1. **Speed up the dead air** — each long silence at 5x (waits, downloads, installs) or 3x
-   (shorter pauses), listing them with original times. With a floating label over each
+1. **Speed up the dead air** — 10x for any silence longer than 30 seconds (waits,
+   downloads, installs), 5x for everything shorter, listing them with original times. With a floating label over each
    stretch saying what is being skipped, or without.
 2. **Trim the start and end** — dead air before the talking starts or after it stops.
 3. **Chapters and a contents card** — needs a transcript; chapter markers plus a pasteable
@@ -108,7 +108,7 @@ Write a `.json` file. Every key is optional; include only what was asked for.
 ```json
 {
   "cuts":     [["0:00", "1:30"], ["14:05", "end"]],
-  "speed":    [{"range": ["5:00", "8:00"], "factor": 5, "label": "5x - waiting for download"}],
+  "speed":    [{"range": ["5:00", "8:00"], "factor": 10, "label": "10x - waiting for download"}],
   "text":     [{"range": ["9:00", "9:20"], "text": "the menu moved in v4"}],
   "chapters": [{"at": "0:00", "title": "Introduction"},
                {"at": "8:00", "title": "Installing the toolchain"}],
@@ -426,8 +426,8 @@ vedit transcribe lecture.mp4 -o t.txt         # -> read it, propose chapters
 ```json
 {
   "cuts":  [["0:00", "1:30"]],
-  "speed": [{"range": ["4:20", "6:10"], "factor": 5, "label": "5x - waiting for download"},
-            {"range": ["12:00", "13:30"], "factor": 5, "label": "5x - installing"}],
+  "speed": [{"range": ["4:20", "6:10"], "factor": 10, "label": "10x - waiting for download"},
+            {"range": ["12:00", "13:30"], "factor": 10, "label": "10x - installing"}],
   "chapters": [{"at": "1:30", "title": "Downloading R"},
                {"at": "6:10", "title": "Installing RStudio"},
                {"at": "13:30", "title": "First Quarto document"}],
