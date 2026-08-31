@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from . import VeditError, __version__
-from . import media, render, snippet as snippet_mod, spec as spec_mod, still as still_mod, transcribe as transcribe_mod
+from . import ground, media, render, snippet as snippet_mod, spec as spec_mod, still as still_mod, transcribe as transcribe_mod
 
 EXAMPLE = {
     "cuts": [["0:00", "1:30"], ["14:05", "end"]],
@@ -185,6 +185,16 @@ def _cmd_still(args) -> int:
               f"pixel grid over your highlights. read THIS file to verify the boxes "
               f"(the grid labels give the corrected x/y if one missed); embed only "
               f"{out.name}.", file=sys.stderr)
+
+    # Deterministic grounding: OCR the frame and measure whether each labelled box covers
+    # the text its label names. Findings only — the render stands either way.
+    if any(h.label for h in spec.highlights):
+        if ground.available():
+            for line in ground.report(ground.check(spec, info)):
+                print(line, file=sys.stderr)
+        elif not args.quiet:
+            print("grounding  tesseract not found (or VEDIT_NO_OCR set); skipping the OCR "
+                  "check of the highlight boxes", file=sys.stderr)
 
     # The sidecar: the spec written back beside the image, with the source and output
     # recorded, so every screenshot stays reproducible and tweakable. Skipped when the

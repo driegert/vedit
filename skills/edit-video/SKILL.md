@@ -265,6 +265,13 @@ last — so you measure once, on the frame you looked at, and never re-derive an
    is at about `x 1210, y 690`. Fix the spec from the labels, re-run, look again. One
    correction is normal; a second guess without reading the grid is how boxes end up on
    the wrong button.
+   The run also prints **`grounding` lines** when `tesseract` is installed: OCR looked for
+   each label's text on screen and reports whether the drawn box covers it. `LIKELY MISS`
+   or `CLIPS the text` comes with the `x`/`y` to set — do that before anything else, then
+   read the twin; `verify by eye` means OCR could not decide, so the twin is the judge.
+   Write the control's **visible text** into the label (`Click Next`, `Pick: Quarto
+   Document`) — that is what the check looks for; a label like `Gear icon` cannot be
+   grounded.
 3. **Embed the clean file.** The `.check` twin is a measuring aid for you — it never
    appears in the guide.
 
@@ -274,6 +281,14 @@ each screenshot's recipe: to tweak one later, edit the sidecar and re-run
 `vedit still lecture.mp4 lecture-guide-img/step-02-download-rstudio.json -o lecture-guide-img/step-02-download-rstudio.jpg`.
 The sidecars are part of the guide's working set — keep them with the images, never
 list them among the deletable working files.
+
+If your harness provides a **`still_reviewer` subagent, delegate the look** instead of
+reading the twin yourself: spawn one per image with the two paths (the sidecar and the
+`.check` twin) — several in parallel is fine. An `OK` verdict clears the image without it
+ever entering your context. On a `MISS`, read that one twin yourself and fix the spec from
+the grid labels — the reviewer's suggested coordinates are a hint, not a measurement. Cap
+the loop at two review rounds per image; if the two of you still disagree, keep your own
+reading and note the disagreement in your report.
 
 Give the control's own edges — where the text or button starts and stops — and let `pad`
 provide the breathing room; do not pre-widen `w`/`h` by guesswork. A coordinate read off
@@ -414,6 +429,7 @@ command — do not try to configure credentials yourself.
 | A gridded frame or a `.check` file in the guide | The grid is for you. Embed the clean output; the `.check` twin stays out. |
 | A highlight nobody looked at | Off by a hundred pixels it boxes the wrong button. `read` the `.check` twin of every annotated still before embedding the clean one. |
 | Fixing a missed box by trial and error | The `.check` twin already shows the answer: read the grid labels beside the control and set `x`/`y` once. |
+| Ignoring a `grounding … LIKELY MISS` line | OCR found the label's text where the box is not. Set the printed `x`/`y`, re-run, then read the twin. |
 | Step numbers restarting at 1 in each chapter | One counter for the whole guide: `Step 1`–`Step N` in the `###` headings, continuing across chapter headings. |
 | The `.json` sidecars listed as deletable clutter | Each is a screenshot's recipe, written automatically by `still`. They stay beside the images. |
 | Rewriting the `.qmd` when the linter reports issues | The rewrite reproduces them. `edit` the reported lines, nothing else. |

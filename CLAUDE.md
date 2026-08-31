@@ -13,7 +13,7 @@ vedit example                                            # print a starter spec
 vedit apply lecture.mp4 edits.json -o out.mp4 --dry-run  # resolve times, estimate, no render
 vedit apply lecture.mp4 edits.json -o out.mp4            # render
 vedit transcribe lecture.mp4 -o transcript.txt           # [m:ss] one line per sentence
-vedit still lecture.mp4 still.json -o step.jpg           # one frame: highlights, dim, crop, grid (+ .check twin, .json sidecar)
+vedit still lecture.mp4 still.json -o step.jpg           # one frame: highlights, dim, crop, grid (+ .check twin, .json sidecar, OCR grounding)
 vedit example --still                                    # a starter still spec
 vedit snippet out.mp4 --url https://videos.example.org/x.mp4  # paste-ready LMS embed HTML
 uv tool install --editable .                             # reinstall after changing code
@@ -149,6 +149,8 @@ outside an explicit crop is an error, not a silent omission. `grid: true` render
 labelled pixel grid for the measuring pass — the agent reads coordinates off it, then
 re-renders without it. An image input (by suffix) skips `at` and `-ss`. Every successful render writes the spec back as a **sidecar** (`step.jpg` → `step.json`, the raw spec plus `source`/`output` metadata keys the parser accepts and ignores, so a sidecar is itself a valid spec) for later reproduction or tweaking; the write is skipped when the spec argument already *is* the sidecar, and the `.check` twin gets none.
 
+**Grounding (`ground.py`, 2026-08-31).** A VLM asked "is the box on the right thing?" says yes whenever the box is in the right neighbourhood — a five-model pilot that day caught semantic misses (wrong row, wrong button) well and pixel geometry badly (~2 of 16 corrections within a dozen px). Screenshots are flat, so the geometric half has a deterministic answer: with `tesseract` on `PATH`, every labelled highlight is OCR-grounded after the render. The label is reduced to the on-screen text it names (`queries_for`: quoted text, else strip `1.`/`Click`/`Pick:`, else split on ` - `/`: `), and two OCR passes look for it — the **region around the drawn box at 3x first** (tesseract's full-frame pass drops small button text: `Next`/`Back` were invisible at 1x), then the whole frame to say where the text really is. Tolerances are the point: a mouse cursor turned `Document` into `Docurt` at confidence 0, so tokens match on a shared prefix (≥ 4 chars and ≥ 60% of the shorter) or 0.75 similarity, a line qualifies at half its tokens, and a conf-0 word may stand in for the next token. `COVERED = 0.85` of the found phrase box inside `Highlight.rect` passes; below 0.5 is `LIKELY MISS`, between is `CLIPS the text`; one short generic word (`Next`, `OK`) found only far away is *inconclusive*, never a miss. Findings go to stderr and never fail the render. Known blind spot, by design: the same text on two rows (`Windows 11` exe/zip) passes with an "appears 2x" note — that is the reviewer subagent's job.
+
 **`pad` (2026-08-30):** the named rectangle is inflated by `pad` px on every side before
 drawing (`Highlight.target` is what the spec said, `Highlight.rect` what is drawn,
 `Highlight.extent` the drawn rect clipped to the frame; default `max(6, min(w,h)/48)` ≈ 22
@@ -201,6 +203,7 @@ tests/
   test_silent_source.py  # videos with no audio stream
   test_transcribe.py     # verbose_json parsing, window offsets, fail-closed server errors
   test_still.py          # exact ring/dim/crop pixels, output size, image input, the error table
+  test_ground.py         # label->query, fuzzy tokens, line grouping; tesseract on an ffmpeg-drawn image
 ```
 
 The invariant is **exact** duration and frame count, never "looks about right" — every

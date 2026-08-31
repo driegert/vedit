@@ -62,7 +62,7 @@ error: speed[0].factor: must be greater than 0 (got 0). Use a value above 1 to s
 
 `vedit still` grabs one frame from a video (or takes an existing image) and draws the
 reader's eye to part of it — for the step-by-step guide an agent writes alongside an
-instruction video: When a spec has `highlights`, a second file `<name>.check.jpg` is written beside the output — the same still with a labelled coordinate grid over the boxes, for verifying and correcting their placement; embed the clean one. Every render also writes a sidecar beside the image — `step-02.jpg` gets `step-02.json`: the spec as given plus `source` and `output` — and the sidecar is itself a valid spec, so any screenshot can be tweaked later by editing it and re-running `vedit still src.mp4 step-02.json -o step-02.jpg`.
+instruction video: When a spec has `highlights`, a second file `<name>.check.jpg` is written beside the output — the same still with a labelled coordinate grid over the boxes, for verifying and correcting their placement; embed the clean one. Every render also writes a sidecar beside the image — `step-02.jpg` gets `step-02.json`: the spec as given plus `source` and `output` — and the sidecar is itself a valid spec, so any screenshot can be tweaked later by editing it and re-running `vedit still src.mp4 step-02.json -o step-02.jpg`. With `tesseract` on `PATH`, each labelled highlight is also **grounded**: the frame is OCR'd, the label's text is located, and a `grounding` line reports whether the box covers it (with the coordinates to set when it does not). Findings never block the render; `VEDIT_NO_OCR=1` disables the check.
 
 ```json
 {"at": 149,
@@ -87,6 +87,7 @@ crop would remove is an error.
 |---|---|
 | **Python** | 3.12 or newer. |
 | **[uv](https://docs.astral.sh/uv/)** | For installation and the test suite (`uv tool install`, `uv run pytest`). Any PEP 517 installer works for the package itself. |
+| **tesseract** (optional) | On `PATH` with the `eng` data, for the `grounding` check on `still` highlights. Absent, `still` prints one note and skips it. |
 | **ffmpeg / ffprobe** | On `PATH`, built with `libx264`, `libfreetype` (the `drawtext` filter) and a usable system font; `libmp3lame` as well if you use `transcribe` (it sends the server MP3). Developed and tested against 6.1.1. Used for probing, slides, captions, concatenation, loudness measurement, and every `still`. |
 | **auto-editor** | 29.3.x — installed automatically as the one Python dependency, and bounded below 30 because the behaviour table in `CLAUDE.md` is version-specific. It is a shim that downloads its native binary (~40 MB) on first run, so the first render needs network access once. |
 | **A speech-to-text server** (optional) | Only for `vedit transcribe`: an OpenAI-compatible `POST /v1/audio/transcriptions` endpoint that honours `response_format=verbose_json` (segment timestamps), such as [faster-whisper](https://github.com/SYSTRAN/faster-whisper) behind any of its HTTP wrappers. Point `VEDIT_STT_URL` at it, or pass `--url`. Nothing else in `vedit` needs it. |
