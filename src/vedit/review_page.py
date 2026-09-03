@@ -36,6 +36,15 @@ def _boxes_label(n: int) -> str:
     return f"{n} box" if n == 1 else f"{n} boxes"
 
 
+def _arrows_label(n: int) -> str:
+    return f"{n} arrow" if n == 1 else f"{n} arrows"
+
+
+def _count_kinds(boxes) -> tuple[int, int]:
+    n_arrows = sum(1 for b in boxes if b.get("shape") == "arrow")
+    return len(boxes) - n_arrows, n_arrows
+
+
 def _crop_label(crop) -> str:
     if crop is None:
         return "crop none"
@@ -47,7 +56,11 @@ def _crop_label(crop) -> str:
 def _draft_line(at, boxes, crop, *, saved: bool) -> str:
     if at is None:
         return "nothing staged yet — click a moment above"
-    parts = [f"moment {at:g} s", _boxes_label(len(boxes)), _crop_label(crop), "saved" if saved else "unsaved"]
+    n_boxes, n_arrows = _count_kinds(boxes)
+    parts = [f"moment {at:g} s", _boxes_label(n_boxes)]
+    if n_arrows:
+        parts.append(_arrows_label(n_arrows))
+    parts += [_crop_label(crop), "saved" if saved else "unsaved"]
     return " · ".join(parts)
 
 
@@ -63,17 +76,27 @@ def _seed_json(shot) -> str:
     return json.dumps(payload, separators=(",", ":")).replace("<", "\\u003c")
 
 
-def _shot_html(step_idx: int, shot_idx: int, shot, rel) -> str:
+def _remove_button_html(step_idx: int, shot_idx: int, image_name: str) -> str:
+    # data-image travels with the decision so the server can refuse a stale index
+    return (f'<button class="remove" data-step="{step_idx}" data-shot="{shot_idx}" '
+            f'data-image="{html.escape(image_name, quote=True)}">Remove image</button>')
+
+
+def _shot_html(step_idx: int, shot_idx: int, shot, rel, n_shots: int) -> str:
     esc = html.escape
     sid = f"{step_idx}-{shot_idx}"
     still_src = esc(rel(shot.image))
 
     if shot.at is None:
+        actions_html = (
+            f'\n        <div class="actions">{_remove_button_html(step_idx, shot_idx, shot.image.name)}</div>'
+            if n_shots > 1 else ""
+        )
         return f'''
       <figure class="shot" data-step="{step_idx}" data-shot="{shot_idx}">
         <div class="stillwrap"><img id="still-{sid}" src="{still_src}"></div>
         <figcaption class="caption">{esc(shot.caption)}</figcaption>
-        <p class="hint">No sidecar for this image, so no moment or box to change.</p>
+        <p class="hint">No sidecar for this image, so no moment or box to change.</p>{actions_html}
       </figure>'''
 
     boxes = list(getattr(shot, "boxes", None) or [])
@@ -86,6 +109,7 @@ def _shot_html(step_idx: int, shot_idx: int, shot, rel) -> str:
     )
     at_meta = f'at {_clock(shot.at)} ({shot.at:g}s)'
     draft_line = esc(_draft_line(shot.at, boxes, crop, saved=True))
+    remove_html = f'\n          {_remove_button_html(step_idx, shot_idx, shot.image.name)}' if n_shots > 1 else ""
     return f'''
       <figure class="shot" data-step="{step_idx}" data-shot="{shot_idx}">
         <div class="stillwrap">
@@ -98,29 +122,30 @@ def _shot_html(step_idx: int, shot_idx: int, shot, rel) -> str:
           <canvas></canvas>
         </div>
         <script type="application/json" class="seed" data-step="{step_idx}" data-shot="{shot_idx}">{_seed_json(shot)}</script>
-        <p class="hint">Drag to draw a box (red) or the crop (blue, dashed); coordinates convert to full-frame pixels. Press Apply to save.</p>
+        <p class="hint">Drag to draw a box or arrow (red) or the crop (blue, dashed); coordinates convert to full-frame pixels. Press Apply to save.</p>
         <div class="cands">{cand_figs}</div>
         <div class="tools">
           <button class="tool active" data-tool="box" data-step="{step_idx}" data-shot="{shot_idx}">Box</button>
+          <button class="tool" data-tool="arrow" data-step="{step_idx}" data-shot="{shot_idx}">Arrow</button>
           <button class="tool" data-tool="crop" data-step="{step_idx}" data-shot="{shot_idx}">Crop</button>
           <button class="nocrop" data-step="{step_idx}" data-shot="{shot_idx}">No crop</button>
           <button class="margincrop" data-step="{step_idx}" data-shot="{shot_idx}">Margin crop</button>
-          <button class="undobox" data-step="{step_idx}" data-shot="{shot_idx}">Undo box</button>
-          <button class="clearboxes" data-step="{step_idx}" data-shot="{shot_idx}">Clear boxes</button>
+          <button class="undobox" data-step="{step_idx}" data-shot="{shot_idx}">Undo last</button>
+          <button class="clearboxes" data-step="{step_idx}" data-shot="{shot_idx}">Clear all</button>
         </div>
         <p class="draft" data-step="{step_idx}" data-shot="{shot_idx}">{draft_line}</p>
         <div class="actions">
           <button class="keep" data-step="{step_idx}" data-shot="{shot_idx}">Keep</button>
           <button class="apply" data-step="{step_idx}" data-shot="{shot_idx}">Apply</button>
           <input class="label" data-step="{step_idx}" data-shot="{shot_idx}" placeholder="label for the next box (optional)">
-          <span class="status" id="status-{sid}"></span>
+          <span class="status" id="status-{sid}"></span>{remove_html}
         </div>
       </figure>'''
 
 
 def _step_html(s, rel) -> str:
     esc = html.escape
-    shots_html = "".join(_shot_html(s.index, i, shot, rel) for i, shot in enumerate(s.shots))
+    shots_html = "".join(_shot_html(s.index, i, shot, rel, len(s.shots)) for i, shot in enumerate(s.shots))
     cols = min(len(s.shots), 3) or 1
     new_draft_line = esc(_draft_line(None, [], None, saved=False))
     return f'''
@@ -174,7 +199,7 @@ figure { margin:0; } figcaption { font-size:.8rem; color:var(--muted); margin-to
 .cand button { margin-top:4px; }
 button.moment.selected { outline:2px solid var(--ok); background:#eaf7ee; }
 .tools { display:flex; gap:6px; align-items:center; margin-top:10px; flex-wrap:wrap; }
-button.tool[data-tool="box"] { border-color:var(--box); color:var(--box); }
+button.tool[data-tool="box"], button.tool[data-tool="arrow"] { border-color:var(--box); color:var(--box); }
 button.tool[data-tool="crop"] { border-color:var(--crop); color:var(--crop); border-style:dashed; }
 button.tool.active, button.mode.active { box-shadow:inset 0 0 0 1px currentColor; font-weight:600; }
 button.undobox, button.clearboxes { border-color:var(--box); color:var(--box); }
@@ -184,6 +209,8 @@ button { font:inherit; padding:4px 10px; border:1px solid var(--rule); border-ra
 button.keep { border-color:var(--ok); color:var(--ok); }
 button.apply { border-color:var(--ok); color:var(--ok); font-weight:600; }
 button.nocrop, button.margincrop { border-color:var(--crop); color:var(--crop); }
+button.remove { border-color:var(--box); color:var(--box); margin-left:auto; }
+button.remove.armed { background:var(--box); color:#fff; font-weight:600; }
 input { font:inherit; padding:4px 8px; border:1px solid var(--rule); border-radius:4px; min-width:220px; }
 .status { font-size:.85rem; color:var(--muted); } .status.ok { color:var(--ok); } .status.err { color:var(--box); }
 .step.decided h2::before { content:"\\2713 "; color:var(--ok); }
@@ -193,6 +220,9 @@ input { font:inherit; padding:4px 8px; border:1px solid var(--rule); border-radi
 _SCRIPT = '''
 const SERVE = __SERVE__;
 const FRAME_W = __FRAME_W__, FRAME_H = __FRAME_H__;
+// still.py's arrow minimum: below head length + 8 there is no room for a head (40 px at 1080p)
+const ARROW_T = Math.max(4, Math.round(Math.min(FRAME_W, FRAME_H) / 135));
+const MIN_ARROW = Math.max(24, Math.max(18, 4 * ARROW_T) + 8);
 const decisions = {};
 const drafts = {};
 const newDrafts = {};
@@ -255,6 +285,12 @@ function activeDraft(step, shot) {
 }
 
 function boxesLabel(n) { return n + (n === 1 ? ' box' : ' boxes'); }
+function arrowsLabel(n) { return n + (n === 1 ? ' arrow' : ' arrows'); }
+function countKinds(boxes) {
+  let arrows = 0;
+  (boxes || []).forEach(b => { if (b.shape === 'arrow') arrows++; });
+  return {boxes: (boxes || []).length - arrows, arrows};
+}
 function cropLabel(crop) {
   if (crop === null || crop === undefined) return 'crop none';
   if (crop.margin !== undefined) return 'crop margin';
@@ -262,7 +298,11 @@ function cropLabel(crop) {
 }
 function draftLine(d) {
   if (!d || d.at === undefined) return 'nothing staged yet — click a moment above';
-  return ['moment ' + d.at + ' s', boxesLabel(d.boxes.length), cropLabel(d.crop), d.saved ? 'saved' : 'unsaved'].join(' · ');
+  const k = countKinds(d.boxes);
+  const parts = ['moment ' + d.at + ' s', boxesLabel(k.boxes)];
+  if (k.arrows) parts.push(arrowsLabel(k.arrows));
+  parts.push(cropLabel(d.crop), d.saved ? 'saved' : 'unsaved');
+  return parts.join(' · ');
 }
 function draftEl(step, shot) {
   return document.querySelector('.draft[data-step="' + step + '"][data-shot="' + shot + '"]');
@@ -273,9 +313,28 @@ function renderDraftLine(step, shot) {
   if (el) { el.textContent = draftLine(d); el.className = 'draft'; }
 }
 
+// Shaft (tail -> a point `len` short of the tip) plus a filled triangular head at the tip.
+// Head size is fixed in canvas px (not scaled by frame->canvas `s`) so it stays legible at
+// any zoom. Caller sets strokeStyle/fillStyle/lineWidth first.
+function drawArrowHead(ctx, x1, y1, x2, y2) {
+  const len = 14, hw = 7;
+  const dx = x2 - x1, dy = y2 - y1;
+  const dist = Math.hypot(dx, dy) || 1;
+  const ux = dx / dist, uy = dy / dist;
+  const bx = x2 - ux * len, by = y2 - uy * len;
+  const nx = -uy, ny = ux;
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(bx, by); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(bx + nx * hw, by + ny * hw);
+  ctx.lineTo(bx - nx * hw, by - ny * hw);
+  ctx.closePath(); ctx.fill();
+}
+
 // Canvas always renders the *active* draft (the shot's own in Edit mode, the step's shared
-// staging draft in New-image mode) — every box red-solid with its label, the crop blue-
-// dashed. Called on image load, on resize, and after every draft mutation.
+// staging draft in New-image mode) — every box red-solid with its label, every arrow red
+// shaft+head with its label near the tail, the crop blue-dashed. Called on image load, on
+// resize, and after every draft mutation.
 function drawCanvas(step, shot) {
   const wrap = document.querySelector('.draw[data-step="' + step + '"][data-shot="' + shot + '"]');
   if (!wrap) return;
@@ -287,6 +346,16 @@ function drawCanvas(step, shot) {
   if (!d) return;
   const s = cv.width / FRAME_W;
   (d.boxes || []).forEach(b => {
+    if (b.shape === 'arrow') {
+      ctx.lineWidth = 3; ctx.setLineDash([]); ctx.strokeStyle = '#d1352b'; ctx.fillStyle = '#d1352b';
+      drawArrowHead(ctx, b.x1 * s, b.y1 * s, b.x2 * s, b.y2 * s);
+      if (b.label) {
+        ctx.font = '12px sans-serif';
+        ctx.fillText(b.label, b.x1 * s + 2, Math.max(10, b.y1 * s - 4));
+      }
+      return;
+    }
+    if (b.shape !== undefined) return;               // unknown shape: don't draw it
     ctx.lineWidth = 2; ctx.setLineDash([]); ctx.strokeStyle = '#d1352b';
     ctx.strokeRect(b.x * s, b.y * s, b.w * s, b.h * s);
     if (b.label) {
@@ -329,7 +398,16 @@ async function decide(step, shot, d) {
     const r = await fetch('/decide', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)});
     const j = await r.json();
     if (!j.ok) { hideOverlay(step, shot); status(step, shot, j.error || 'failed', 'err'); return; }
-    hideOverlay(step, shot); status(step, shot, j.message || 'done', 'ok'); decided(step);
+    hideOverlay(step, shot);
+    const msg = j.message || 'done';
+    if (j.reload) {
+      // e.g. `remove`: the shot list changed underneath this page, so reload it wholesale
+      // rather than trying to patch the DOM in place.
+      status(step, shot, msg + ' — reloading the page', 'ok');
+      setTimeout(() => location.reload(), 600);
+    } else {
+      status(step, shot, msg, 'ok'); decided(step);
+    }
   } catch (e) {
     hideOverlay(step, shot);
     status(step, shot, 'server not reachable: ' + e, 'err');
@@ -438,6 +516,17 @@ function applyBox(step, shot, box) {
   d.boxes.push(entry);
   markDirty(step, shot, 'boxes');
 }
+function applyArrow(step, shot, arrow) {
+  if (!editable(step, shot)) return;
+  const labelEl = document.querySelector('.label[data-step="' + step + '"][data-shot="' + shot + '"]');
+  const label = labelEl ? labelEl.value.trim() : '';
+  const d = activeDraft(step, shot);
+  if (!d) return;
+  const entry = Object.assign({}, arrow);
+  if (label) entry.label = label;
+  d.boxes.push(entry);
+  markDirty(step, shot, 'boxes');
+}
 function applyCrop(step, shot, crop) {
   if (!editable(step, shot)) return;
   const d = activeDraft(step, shot);
@@ -461,8 +550,14 @@ document.querySelectorAll('.draw').forEach(wrap => {
     const [x, y] = pos(e);
     drawCanvas(step, shot);
     const c = cv.getContext('2d');
+    const tool = currentTool(step, shot);
+    if (tool === 'arrow') {
+      c.lineWidth = 3; c.setLineDash([]); c.strokeStyle = '#d1352b'; c.fillStyle = '#d1352b';
+      drawArrowHead(c, start[0], start[1], x, y);
+      return;
+    }
     c.lineWidth = 3;
-    if (currentTool(step, shot) === 'crop') { c.strokeStyle = '#2b6cb0'; c.setLineDash([7, 5]); }
+    if (tool === 'crop') { c.strokeStyle = '#2b6cb0'; c.setLineDash([7, 5]); }
     else { c.strokeStyle = '#d1352b'; c.setLineDash([]); }
     c.strokeRect(Math.min(start[0], x), Math.min(start[1], y), Math.abs(x - start[0]), Math.abs(y - start[1]));
   };
@@ -470,13 +565,22 @@ document.querySelectorAll('.draw').forEach(wrap => {
     if (!start) return;
     const [x, y] = pos(e);
     const s = FRAME_W / cv.width;
+    const tool = currentTool(step, shot);
+    if (tool === 'arrow') {
+      const x1 = Math.round(start[0] * s), y1 = Math.round(start[1] * s);
+      const x2 = Math.round(x * s), y2 = Math.round(y * s);
+      start = null;
+      if (Math.hypot(x2 - x1, y2 - y1) < MIN_ARROW) { drawCanvas(step, shot); return; }
+      applyArrow(step, shot, {shape: 'arrow', x1, y1, x2, y2});
+      return;
+    }
     const rect = {
       x: Math.round(Math.min(start[0], x) * s), y: Math.round(Math.min(start[1], y) * s),
       w: Math.round(Math.abs(x - start[0]) * s), h: Math.round(Math.abs(y - start[1]) * s)
     };
     start = null;
     if (rect.w < 8 || rect.h < 8) { drawCanvas(step, shot); return; }
-    if (currentTool(step, shot) === 'crop') applyCrop(step, shot, rect);
+    if (tool === 'crop') applyCrop(step, shot, rect);
     else applyBox(step, shot, rect);
   };
 });
@@ -496,6 +600,34 @@ document.querySelectorAll('button.clearboxes').forEach(b => b.onclick = () => {
   const d = activeDraft(step, shot);
   if (d) d.boxes = [];
   markDirty(step, shot, 'boxes');
+});
+
+// Two-click guard: first click arms the button (label flips to "Really remove?" for 4s,
+// class `armed`), a second click within that window posts the removal. Disabled while the
+// shot's own edit draft is busy (no-sidecar shots have no draft, so they're never busy).
+document.querySelectorAll('button.remove').forEach(b => {
+  const step = +b.dataset.step, shot = +b.dataset.shot;
+  const label = b.textContent;
+  let armed = false, timer = null;
+  const disarm = () => { armed = false; b.classList.remove('armed'); b.textContent = label; };
+  b.onclick = async () => {
+    const d = drafts[draftKey(step, shot)];
+    if (d && d.busy) return;
+    if (!armed) {
+      armed = true;
+      b.classList.add('armed');
+      b.textContent = 'Really remove?';
+      timer = setTimeout(disarm, 4000);
+      return;
+    }
+    clearTimeout(timer);
+    disarm();
+    // One removal at a time per step: the shot indexes shift once the page rebuilds.
+    const peers = document.querySelectorAll('button.remove[data-step="' + step + '"]');
+    peers.forEach(x => { x.disabled = true; });
+    try { await decide(step, shot, {action: 'remove', image: b.dataset.image}); }
+    finally { peers.forEach(x => { x.disabled = false; }); }
+  };
 });
 
 document.querySelectorAll('button.keep').forEach(b => b.onclick = () => {
@@ -591,8 +723,8 @@ def render_page(steps, out_dir, info, source, *, serve: bool) -> str:
 <style>{_CSS}</style>
 <main>
 <h1>Review: {html.escape(source.name)}</h1>
-<p class="lede">{len(steps)} screenshots in guide order. Click a candidate moment, drag boxes
-or a crop, then press Apply to save the shot in one render. Switch a step to New image mode
+<p class="lede">{len(steps)} screenshots in guide order. Click a candidate moment, drag boxes,
+arrows or a crop, then press Apply to save the shot in one render. Switch a step to New image mode
 to stage another screenshot the same way. {lede}</p>
 {sections}
 <section class="step"><h2>review.json</h2><textarea id="out" readonly></textarea>

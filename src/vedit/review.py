@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -49,6 +50,7 @@ DEFAULT_MARGIN = 160        # crop margin used around a drawn/added box in place
 MAX_SHOTS_PER_STEP = 3      # layout-ncol cap: a step may hold at most this many images side by side
 DEFAULT_CAPTION = "(caption pending)"
 RECT_KEYS = {"x", "y", "w", "h"}
+ARROW_KEYS = ("x1", "y1", "x2", "y2")   # order matters: built into highlight dicts in this order
 
 
 @dataclass
@@ -66,7 +68,9 @@ class Shot:
     thumbs: list[str] = field(default_factory=list)   # page-relative half-width frames, one per candidate
     boxes: list[dict] = field(default_factory=list)   # current highlights as full-frame rects:
         # [{"x","y","w","h","label"?}] -- measured ones as written; a text anchor contributes its
-        # `resolved` rect (and its label) if it has one, else nothing
+        # `resolved` rect (and its label) if it has one, else nothing. An arrow contributes
+        # {"shape":"arrow","x1","y1","x2","y2","label"?} -- measured as written, or a text
+        # anchor's cached `line`, else nothing.
     crop: dict | None = None   # the sidecar's crop as written: {x,y,w,h} | {"margin": N} | None
 
 
@@ -98,12 +102,24 @@ def _read_sidecar(image: Path) -> tuple[Path, dict | None, float | None]:
 
 def _shot_boxes(spec: dict | None) -> list[dict]:
     """Current highlights as full-frame rects: a measured box as written; a text anchor
-    contributes its `resolved` rect (and label) if OCR has placed it, else nothing."""
+    contributes its `resolved` rect (and label) if OCR has placed it, else nothing. An
+    arrow item contributes {"shape":"arrow","x1","y1","x2","y2","label"?} -- from its own
+    `x1..y2` if measured, else from its cached `line` (a resolved text anchor), else
+    nothing (not yet resolved)."""
     boxes = []
     for hi in (spec or {}).get("highlights") or []:
         if not isinstance(hi, dict):
             continue
-        if RECT_KEYS <= set(hi):
+        if hi.get("shape") == "arrow":
+            if all(isinstance(hi.get(k), (int, float)) for k in ARROW_KEYS):
+                rect = {"shape": "arrow", **{k: int(hi[k]) for k in ARROW_KEYS}}
+            elif isinstance(hi.get("line"), dict) and all(isinstance(hi["line"].get(k), (int, float))
+                                                           for k in ARROW_KEYS):
+                line = hi["line"]
+                rect = {"shape": "arrow", **{k: int(line[k]) for k in ARROW_KEYS}}
+            else:
+                continue
+        elif RECT_KEYS <= set(hi):
             rect = {k: int(hi[k]) for k in ("x", "y", "w", "h")}
         elif "text" in hi and isinstance(hi.get("resolved"), dict) and RECT_KEYS <= set(hi["resolved"]):
             r = hi["resolved"]
@@ -270,7 +286,8 @@ def build(qmd: Path, out_dir: Path, *, video: Path | None = None, width: int = D
         for step in steps
     }
     (out_dir / "manifest.json").write_text(json.dumps(
-        {"guide": str(qmd), "video": str(source), "width": info.width, "height": info.height,
+        {"guide": str(qmd), "video": str(source), "out_dir": str(out_dir.resolve()),
+         "width": info.width, "height": info.height,
          "page_width": width, "serve": serve, "steps": manifest}, indent=2), encoding="utf-8")
     return page
 
@@ -368,10 +385,27 @@ def _padded_extent(rect: Rect, pad: int, frame_w: int, frame_h: int) -> Rect:
 def _highlight_extents(highlights: list, spec: dict, frame_w: int, frame_h: int) -> list[Rect]:
     """The padded, clamped extent of every highlight that has a known rect right now: a
     measured box as written, or a text anchor with a cached `resolved`. An anchor with no
-    `resolved` (about to re-resolve, or never has) is ignored -- its position isn't known yet."""
+    `resolved` (about to re-resolve, or never has) is ignored -- its position isn't known yet.
+    An arrow contributes `still.arrow_extent(...)` (from its own `x1..y2`, or a text anchor's
+    cached `line`) -- unpadded, since an arrow's extent formula already includes its head."""
+    from .still import arrow_extent, arrow_thickness   # module import here avoids any import cycle
+
     extents = []
     for item in highlights or []:
         if not isinstance(item, dict):
+            continue
+        if item.get("shape") == "arrow":
+            if all(isinstance(item.get(k), (int, float)) for k in ARROW_KEYS):
+                x1, y1, x2, y2 = (int(item[k]) for k in ARROW_KEYS)
+            elif isinstance(item.get("line"), dict) and all(isinstance(item["line"].get(k), (int, float))
+                                                             for k in ARROW_KEYS):
+                line = item["line"]
+                x1, y1, x2, y2 = (int(line[k]) for k in ARROW_KEYS)
+            else:
+                continue
+            thickness = int(item["thickness"]) if isinstance(item.get("thickness"), (int, float)) \
+                else arrow_thickness(frame_w, frame_h)
+            extents.append(arrow_extent(x1, y1, x2, y2, thickness, frame_w, frame_h))
             continue
         if RECT_KEYS <= set(item):
             rect = Rect(int(item["x"]), int(item["y"]), int(item["w"]), int(item["h"]))
@@ -407,11 +441,44 @@ def _grow_crop(crop_rect: Rect, highlights: list, spec: dict, frame_w: int, fram
     return Rect(x0, y0, x1 - x0, y1 - y0), True
 
 
+def _parse_boxes(raw: list) -> list[dict]:
+    """`boxes` list items -> sidecar highlight dicts: a box/ellipse {x,y,w,h,label?}, or an
+    arrow {"shape":"arrow","x1","y1","x2","y2","label"?}. Shared by `_apply_edit`,
+    `apply_decision`'s legacy `box`, and `add_image`."""
+    error = 'boxes[{}] needs x, y, w, h (or shape "arrow" with x1, y1, x2, y2)'
+    highlights = []
+    for i, b in enumerate(raw):
+        if not isinstance(b, dict):
+            raise VeditError(error.format(i))
+        if b.get("shape") == "arrow":
+            if not all(isinstance(b.get(k), (int, float)) for k in ARROW_KEYS):
+                raise VeditError(error.format(i))
+            hi = {"shape": "arrow", **{k: int(b[k]) for k in ARROW_KEYS}}
+        elif all(isinstance(b.get(k), (int, float)) for k in ("x", "y", "w", "h")):
+            hi = {k: int(b[k]) for k in ("x", "y", "w", "h")}
+        else:
+            raise VeditError(error.format(i))
+        if b.get("label"):
+            hi["label"] = str(b["label"])
+        highlights.append(hi)
+    return highlights
+
+
 def _boxes_message(highlights: list[dict]) -> str:
     if len(highlights) == 1:
         h = highlights[0]
+        if h.get("shape") == "arrow":
+            return f"arrow set from x {h['x1']} y {h['y1']} to x {h['x2']} y {h['y2']}"
         return f"box set to x {h['x']} y {h['y']} w {h['w']} h {h['h']}"
-    return f"boxes set ({len(highlights)})"
+    n_arrows = sum(1 for h in highlights if h.get("shape") == "arrow")
+    n_boxes = len(highlights) - n_arrows
+    if not n_arrows:
+        return f"boxes set ({n_boxes})"
+    parts = []
+    if n_boxes:
+        parts.append(f"{n_boxes} box" + ("" if n_boxes == 1 else "es"))
+    parts.append(f"{n_arrows} arrow" + ("" if n_arrows == 1 else "s"))
+    return f"boxes set ({', '.join(parts)})"
 
 
 def _apply_edit(spec: dict, edit: dict, manifest: dict, video: Path, image: Path) -> str:
@@ -432,17 +499,13 @@ def _apply_edit(spec: dict, edit: dict, manifest: dict, video: Path, image: Path
         boxes = edit["boxes"]
         if not isinstance(boxes, list):
             raise VeditError("'boxes' must be a list")
-        highlights = []
-        for i, b in enumerate(boxes):
-            if not isinstance(b, dict) or not all(isinstance(b.get(k), (int, float)) for k in ("x", "y", "w", "h")):
-                raise VeditError(f"boxes[{i}] needs x, y, w, h")
-            hi = {k: int(b[k]) for k in ("x", "y", "w", "h")}
-            if b.get("label"):
-                hi["label"] = str(b["label"])
-            highlights.append(hi)
+        highlights = _parse_boxes(boxes)
         spec["highlights"] = highlights
         if highlights:
-            spec.setdefault("dim", 0.35)
+            if any(h.get("shape") != "arrow" for h in highlights):
+                spec.setdefault("dim", 0.35)
+            else:
+                spec.pop("dim", None)          # arrows leave nothing bright to dim around
             parts.append(_boxes_message(highlights))
         else:
             spec.pop("dim", None)                  # dim has nothing left to leave bright
@@ -520,9 +583,7 @@ def apply_decision(manifest: dict, step: int, decision: dict) -> tuple[Path, str
         edit = {"at": at}
     elif action == "box":
         box = decision.get("box") or {}
-        if not all(isinstance(box.get(k), (int, float)) for k in ("x", "y", "w", "h")):
-            raise VeditError("a box decision needs x, y, w, h")
-        highlight = {k: int(box[k]) for k in ("x", "y", "w", "h")}
+        highlight = _parse_boxes([box])[0]
         label = decision.get("label") or next(
             (hi.get("label") for hi in (spec.get("highlights") or []) if isinstance(hi, dict) and hi.get("label")),
             None)
@@ -604,24 +665,17 @@ def add_image(manifest: dict, step: int, decision: dict) -> tuple[Path, str]:
     if boxes_field is not None:
         if not isinstance(boxes_field, list):
             raise VeditError("an add decision's 'boxes' must be a list")
-        for i, b in enumerate(boxes_field):
-            if not isinstance(b, dict) or not all(isinstance(b.get(k), (int, float)) for k in ("x", "y", "w", "h")):
-                raise VeditError(f"boxes[{i}] needs x, y, w, h")
-            hi = {k: int(b[k]) for k in ("x", "y", "w", "h")}
-            if b.get("label"):
-                hi["label"] = str(b["label"])
-            highlights.append(hi)
+        highlights = _parse_boxes(boxes_field)
     elif box is not None:
-        if not all(isinstance(box.get(k), (int, float)) for k in ("x", "y", "w", "h")):
-            raise VeditError("an add decision's box needs x, y, w, h")
-        highlight = {k: int(box[k]) for k in ("x", "y", "w", "h")}
+        highlight = _parse_boxes([box])[0]
         label = decision.get("label")
         if label:
             highlight["label"] = label
         highlights.append(highlight)
     if highlights:
         spec["highlights"] = highlights
-        spec["dim"] = 0.35
+        if any(h.get("shape") != "arrow" for h in highlights):
+            spec["dim"] = 0.35
     if "crop" in decision:
         if decision["crop"] is not None:       # an explicit null is "no crop"
             spec["crop"] = decision["crop"]
@@ -662,6 +716,87 @@ def add_image(manifest: dict, step: int, decision: dict) -> tuple[Path, str]:
     return new_image, f"added {new_image.name}" + note
 
 
+def _removed_paths(removed_dir: Path, srcs: list[Path]) -> list[Path]:
+    """Destinations inside `removed_dir` keeping each name; on a collision the same `-N`
+    goes on every file of the bundle, so an image and its sidecar keep one stem."""
+    n = 0
+    while True:
+        tag = f"-{n}" if n else ""
+        dests = [removed_dir / f"{src.stem}{tag}{src.suffix}" for src in srcs]
+        if not any(d.exists() for d in dests):
+            return dests
+        n += 1
+
+
+def remove_image(manifest: dict, step: int, decision: dict) -> tuple[Path, str]:
+    """Remove one shot from a multi-shot step: splice the guide, byte-exact, reversing what
+    `add_image` inserted, and move the image (and its sidecar / `.check` twin, whichever
+    exist) into `<out_dir>/removed/` -- never deletes a file. Refuses a one-shot step (there
+    is no div to unwrap) and an out-of-range shot index."""
+    entry = manifest["steps"].get(str(step)) or manifest["steps"].get(step)
+    if not entry:
+        raise VeditError(f"step {step} is not in the review manifest")
+    shots = entry["shots"]
+    div = entry.get("div")
+    if len(shots) < 2 or div is None:
+        raise VeditError(f"step {step} has only one image; remove it by editing the guide")
+    shot_index = decision.get("shot", 0)
+    if not 0 <= shot_index < len(shots):
+        raise VeditError(f"step {step} has no shot index {shot_index}")
+    shot = shots[shot_index]
+    image = Path(shot["image"])
+    line = shot["line"]
+    open_line, close_line = div
+    named = decision.get("image")
+    if named is not None and Path(str(named)).name != image.name:    # a stale page's index
+        raise VeditError(f"shot {shot_index} of step {step} is now {image.name}, not "
+                         f"{Path(str(named)).name}; reload the page")
+
+    qmd = Path(manifest["guide"])
+    root = qmd.parent.resolve()
+    if not _inside(image.resolve(), root):
+        raise VeditError(f"{image.name} lies outside the guide folder; remove it by editing the guide")
+    lines = _guide_lines(qmd)
+    _check_guide_unchanged(qmd, lines, image, line, div)
+    live = sum(1 for j in range(open_line + 1, close_line) if IMAGE_RE.match(lines[j]))
+    if live != len(shots):
+        raise VeditError(f"{qmd.name} has changed since the review page was built (its layout div "
+                         f"now holds {live} images, the page knew {len(shots)}); rebuild the page")
+
+    # Reverse the ["", new_line] (or [new_line, ""]) pair `add_image` inserted: delete the
+    # image line itself, plus whichever neighbour blank line is still inside the div -- the
+    # one right before it if there is one, else the one right after.
+    before_idx, after_idx = line - 1, line + 1
+    to_delete = [line]
+    if before_idx > open_line and lines[before_idx].strip() == "":
+        to_delete.append(before_idx)
+    elif after_idx < close_line and lines[after_idx].strip() == "":
+        to_delete.append(after_idx)
+    for idx in sorted(to_delete, reverse=True):
+        del lines[idx]
+    close_line -= len(to_delete)
+
+    remaining = len(shots) - 1
+    if remaining == 1:                # nothing left to lay out side by side: unwrap the div
+        del lines[close_line]
+        del lines[open_line]
+    else:
+        lines[open_line] = LAYOUT_NCOL_RE.sub(lambda mo: f"{mo.group(1)}{remaining}", lines[open_line], count=1)
+
+    _replace_text(qmd, "\n".join(lines))
+
+    removed_dir = Path(manifest["out_dir"]) / "removed"
+    removed_dir.mkdir(parents=True, exist_ok=True)
+    bundle = [src for src in (image, image.with_suffix(".json"),
+                              image.with_name(f"{image.stem}.check{image.suffix}")) if src.exists()]
+    moved_image = None
+    for src, dest in zip(bundle, _removed_paths(removed_dir, bundle)):
+        shutil.move(str(src), str(dest))
+        if src == image:
+            moved_image = dest
+    return moved_image, f"removed {image.name} (moved to review/removed/)"
+
+
 APPLIED_ACTIONS = {"moment", "box", "crop", "edit"}
 
 
@@ -671,6 +806,7 @@ def apply_all(out_dir: Path) -> list[str]:
     if not review_path.exists():
         raise VeditError(f"{review_path} does not exist; save the page's JSON there first")
     log = json.loads(review_path.read_text(encoding="utf-8"))
+    manifest.setdefault("out_dir", str(out_dir.resolve()))    # manifests built before the key existed
     lines = []
     for step, decisions in sorted(log.items(), key=lambda kv: int(kv[0])):
         for decision in decisions:
@@ -680,11 +816,12 @@ def apply_all(out_dir: Path) -> list[str]:
             elif action in APPLIED_ACTIONS:
                 image, message = apply_decision(manifest, int(step), decision)
                 lines.append(f"step {step}: {message} -> {image.name}")
-            elif action == "add":
-                image, message = add_image(manifest, int(step), decision)
+            elif action in ("add", "remove"):
+                fn = add_image if action == "add" else remove_image
+                image, message = fn(manifest, int(step), decision)
                 lines.append(f"step {step}: {message}")
                 # The guide's line numbers and the step's shot list moved: rebuild before the
-                # next decision so a second add lands after the first, not over it.
+                # next decision so a second add/remove lands correctly, not over the last one.
                 build(Path(manifest["guide"]), out_dir, video=Path(manifest["video"]),
                       width=manifest.get("page_width", DEFAULT_WIDTH), serve=manifest.get("serve", False))
                 manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
@@ -710,6 +847,7 @@ def serve(out_dir: Path, port: int, *, quiet: bool = False) -> ThreadingHTTPServ
     out_dir = out_dir.resolve()
     manifest_path = out_dir / "manifest.json"
     state = {"manifest": json.loads(manifest_path.read_text(encoding="utf-8"))}
+    state["manifest"].setdefault("out_dir", str(out_dir))
     root = Path(state["manifest"]["guide"]).parent.resolve()
     video = Path(state["manifest"]["video"])
     duration = probe(video).duration
@@ -799,9 +937,11 @@ def serve(out_dir: Path, port: int, *, quiet: bool = False) -> ThreadingHTTPServ
                 log = json.loads(review_path.read_text(encoding="utf-8")) if review_path.exists() else {}
                 log.setdefault(str(step), []).append(decision)
                 manifest = state["manifest"]
+                action = decision.get("action")
                 try:
-                    if decision.get("action") == "add":
-                        new_image, message = add_image(manifest, step, decision)
+                    if action in ("add", "remove"):
+                        fn = add_image if action == "add" else remove_image
+                        new_image, message = fn(manifest, step, decision)
                         try:
                             build(Path(manifest["guide"]), out_dir, video=Path(manifest["video"]),
                                   width=manifest["page_width"], serve=manifest["serve"])
@@ -817,7 +957,7 @@ def serve(out_dir: Path, port: int, *, quiet: bool = False) -> ThreadingHTTPServ
                     self._json(200, {"ok": False, "error": str(exc)})
                     return
                 _write_log(review_path, log)
-                if decision.get("action") == "add":
+                if action in ("add", "remove"):
                     self._json(200, {"ok": True, "message": message, "reload": True})
                     return
                 shot = decision.get("shot", 0)

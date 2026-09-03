@@ -628,6 +628,296 @@ def test_edit_clearing_boxes_and_setting_a_margin_crop_together_leaves_no_crop(t
     assert "crop removed (no highlights" in message
 
 
+# ---- Phase 9: arrows in the boxes vocabulary, and remove ----------------------------------
+
+def test_parse_boxes_accepts_plain_boxes_and_arrows(tmp_path):
+    boxes = review._parse_boxes([
+        {"x": 1, "y": 2, "w": 3, "h": 4, "label": "A"},
+        {"shape": "arrow", "x1": 10, "y1": 20, "x2": 30, "y2": 40, "label": "B"},
+    ])
+    assert boxes == [
+        {"x": 1, "y": 2, "w": 3, "h": 4, "label": "A"},
+        {"shape": "arrow", "x1": 10, "y1": 20, "x2": 30, "y2": 40, "label": "B"},
+    ]
+
+
+def test_parse_boxes_rejects_bad_items():
+    error = r'boxes\[0\] needs x, y, w, h \(or shape "arrow" with x1, y1, x2, y2\)'
+    with pytest.raises(VeditError, match=error):
+        review._parse_boxes([{"x": 1, "y": 1, "w": 1}])            # missing h
+    with pytest.raises(VeditError, match=error):
+        review._parse_boxes(["not a dict"])
+    with pytest.raises(VeditError, match=error):
+        review._parse_boxes([{"shape": "arrow", "x1": 1, "y1": 1, "x2": 2}])   # missing y2
+    with pytest.raises(VeditError, match=r'boxes\[1\] needs'):
+        review._parse_boxes([{"x": 1, "y": 1, "w": 1, "h": 1},
+                             {"shape": "arrow", "x1": 1, "y1": 1}])
+
+
+def test_shot_boxes_includes_a_measured_arrow():
+    spec = {"highlights": [
+        {"shape": "arrow", "x1": 10, "y1": 20, "x2": 30, "y2": 40, "label": "Click"},
+        {"x": 5, "y": 5, "w": 10, "h": 10},
+    ]}
+    assert review._shot_boxes(spec) == [
+        {"shape": "arrow", "x1": 10, "y1": 20, "x2": 30, "y2": 40, "label": "Click"},
+        {"x": 5, "y": 5, "w": 10, "h": 10},
+    ]
+
+
+def test_shot_boxes_uses_a_text_arrows_cached_line_and_skips_an_unresolved_one():
+    spec = {"highlights": [
+        {"shape": "arrow", "text": "Install", "from": "left", "line": {"x1": 1, "y1": 2, "x2": 3, "y2": 4}},
+        {"shape": "arrow", "text": "Next"},          # not yet resolved: no x1..y2, no line
+    ]}
+    assert review._shot_boxes(spec) == [{"shape": "arrow", "x1": 1, "y1": 2, "x2": 3, "y2": 4}]
+
+
+def test_boxes_message_counts_by_kind():
+    box = {"x": 1, "y": 2, "w": 3, "h": 4}
+    arrow = {"shape": "arrow", "x1": 1, "y1": 2, "x2": 3, "y2": 4}
+    assert review._boxes_message([box]) == "box set to x 1 y 2 w 3 h 4"
+    assert review._boxes_message([arrow]) == "arrow set from x 1 y 2 to x 3 y 4"
+    assert review._boxes_message([box, box]) == "boxes set (2)"          # unchanged all-box wording
+    assert review._boxes_message([box, arrow]) == "boxes set (1 box, 1 arrow)"
+    assert review._boxes_message([box, box, arrow, arrow]) == "boxes set (2 boxes, 2 arrows)"
+    assert review._boxes_message([arrow, arrow]) == "boxes set (2 arrows)"
+
+
+def test_edit_with_arrow_writes_sidecar_with_no_dim_and_reply_carries_it(tmp_path, media):
+    """Arrow-only highlights leave nothing bright to dim around. Depends on Builder A's
+    still.py arrow support to actually render."""
+    qmd = make_guide(tmp_path, media.video)
+    out = tmp_path / "rev"
+    review.build(qmd, out, width=320)
+    manifest = json.loads((out / "manifest.json").read_text())
+    image, message = review.apply_decision(manifest, 2, {
+        "action": "edit",
+        "boxes": [{"shape": "arrow", "x1": 50, "y1": 50, "x2": 150, "y2": 120, "label": "Click"}],
+    })
+    assert "arrow set from x 50 y 50 to x 150 y 120" in message
+    spec = json.loads((tmp_path / "g-guide-img" / "step-02-plain.json").read_text())
+    assert spec["highlights"] == [{"shape": "arrow", "x1": 50, "y1": 50, "x2": 150, "y2": 120, "label": "Click"}]
+    assert "dim" not in spec
+    assert image.exists()
+
+
+def test_edit_with_mixed_box_and_arrow_sets_dim(tmp_path, media):
+    """Depends on Builder A's still.py arrow support to actually render."""
+    qmd = make_guide(tmp_path, media.video)
+    out = tmp_path / "rev"
+    review.build(qmd, out, width=320)
+    manifest = json.loads((out / "manifest.json").read_text())
+    image, message = review.apply_decision(manifest, 2, {
+        "action": "edit",
+        "boxes": [{"x": 50, "y": 50, "w": 40, "h": 30},
+                  {"shape": "arrow", "x1": 200, "y1": 200, "x2": 260, "y2": 260}],
+    })
+    assert "boxes set (1 box, 1 arrow)" in message
+    spec = json.loads((tmp_path / "g-guide-img" / "step-02-plain.json").read_text())
+    assert spec["dim"] == 0.35
+    assert image.exists()
+
+
+def test_edit_arrow_crop_grows_to_the_arrows_extent(tmp_path, media):
+    """`_highlight_extents`/`_grow_crop` via `still.arrow_extent`/`arrow_thickness`
+    (Builder A). Depends on Builder A's still.py arrow support to actually render."""
+    qmd = make_guide(tmp_path, media.video)
+    out = tmp_path / "rev"
+    review.build(qmd, out, width=320)
+    manifest = json.loads((out / "manifest.json").read_text())
+    image, message = review.apply_decision(manifest, 2, {
+        "action": "edit",
+        "boxes": [{"shape": "arrow", "x1": 500, "y1": 300, "x2": 400, "y2": 200}],
+        "crop": {"x": 0, "y": 0, "w": 50, "h": 50},
+    })
+    assert "crop grown to" in message
+    spec = json.loads((tmp_path / "g-guide-img" / "step-02-plain.json").read_text())
+    crop = spec["crop"]
+    assert crop["x"] <= 400 and crop["y"] <= 200
+    assert crop["x"] + crop["w"] >= 500 and crop["y"] + crop["h"] >= 300
+    assert image.exists()
+
+
+def test_served_edit_decision_reply_carries_an_arrow(tmp_path, media):
+    """Depends on Builder A's still.py arrow support to actually render."""
+    qmd = make_guide(tmp_path, media.video)
+    out = tmp_path / "rev"
+    review.build(qmd, out, width=320, serve=True)
+    server = review.serve(out, 0, quiet=True)
+    port = server.server_address[1]
+    try:
+        def post(body):
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/decide", method="POST",
+                                         data=json.dumps(body).encode(),
+                                         headers={"content-type": "application/json"})
+            return json.loads(urllib.request.urlopen(req).read())
+
+        reply = post({"step": 2, "shot": 0, "action": "edit",
+                      "boxes": [{"shape": "arrow", "x1": 10, "y1": 10, "x2": 80, "y2": 90, "label": "Here"}]})
+        assert reply["ok"]
+        assert reply["boxes"] == [{"shape": "arrow", "x1": 10, "y1": 10, "x2": 80, "y2": 90, "label": "Here"}]
+    finally:
+        server.shutdown()
+
+
+def test_remove_image_refuses_a_one_shot_step_and_a_bad_index(tmp_path, media):
+    qmd = make_guide(tmp_path, media.video)
+    out = tmp_path / "rev"
+    review.build(qmd, out, width=320)
+    manifest = json.loads((out / "manifest.json").read_text())
+    with pytest.raises(VeditError, match="only one image"):
+        review.remove_image(manifest, 2, {"shot": 0})
+    with pytest.raises(VeditError, match="no shot index"):
+        review.remove_image(manifest, 5, {"shot": 5})
+    with pytest.raises(VeditError, match="not in the review manifest"):
+        review.remove_image(manifest, 99, {"shot": 0})
+
+
+def test_remove_image_unwraps_the_div_and_moves_the_files(tmp_path, media):
+    qmd = make_guide(tmp_path, media.video)
+    out = tmp_path / "rev"
+    review.build(qmd, out, width=320)
+    manifest = json.loads((out / "manifest.json").read_text())
+    before_lines = qmd.read_text().splitlines()
+    a_line = next(l for l in before_lines if "step-04-a.png" in l)
+
+    moved, message = review.remove_image(manifest, 5, {"shot": 1})     # remove Shot B
+    assert message == "removed step-04-b.png (moved to review/removed/)"
+    removed_dir = out / "removed"
+    assert moved == removed_dir / "step-04-b.png" and moved.exists()
+    assert (removed_dir / "step-04-b.json").exists()                  # sidecar moved too
+    assert not (tmp_path / "g-guide-img" / "step-04-b.png").exists()  # never deleted, moved
+
+    after_lines = qmd.read_text().splitlines()
+    assert "layout-ncol" not in qmd.read_text()                       # one shot left: div unwrapped
+    assert not any("step-04-b.png" in l for l in after_lines)
+    assert a_line in after_lines                                      # the surviving image line, untouched
+
+
+def test_remove_image_decrements_ncol_from_a_three_shot_div(tmp_path, media):
+    qmd = make_guide(tmp_path, media.video)
+    out = tmp_path / "rev"
+    review.build(qmd, out, width=320)
+    manifest = json.loads((out / "manifest.json").read_text())
+    third, _ = review.add_image(manifest, 5, {"at": 18, "caption": "Shot C"})
+    review.build(qmd, out, width=320)                                 # reload: 3 shots now
+    manifest = json.loads((out / "manifest.json").read_text())
+    assert len(manifest["steps"]["5"]["shots"]) == 3
+
+    moved, _ = review.remove_image(manifest, 5, {"shot": 1})          # remove the middle shot
+    assert moved.name == "step-04-b.png"
+    text = qmd.read_text()
+    assert "layout-ncol=2" in text and "layout-ncol=3" not in text
+    assert "step-04-a.png" in text and "step-04-b.png" not in text and third.name in text
+
+
+def test_remove_image_appends_a_suffix_on_a_name_collision(tmp_path, media):
+    qmd = make_guide(tmp_path, media.video)
+    out = tmp_path / "rev"
+    review.build(qmd, out, width=320)
+    manifest = json.loads((out / "manifest.json").read_text())
+    removed_dir = out / "removed"
+    removed_dir.mkdir()
+    (removed_dir / "step-04-b.png").write_bytes(b"already here")
+
+    moved, _ = review.remove_image(manifest, 5, {"shot": 1})
+    assert moved.name == "step-04-b-1.png" and moved.exists()
+    assert (removed_dir / "step-04-b.png").read_bytes() == b"already here"   # untouched
+    assert (removed_dir / "step-04-b-1.json").exists()      # the bundle shares one suffix
+
+
+def test_remove_image_refuses_a_stale_index_an_outside_image_and_a_changed_div(tmp_path, media):
+    qmd = make_guide(tmp_path, media.video)
+    out = tmp_path / "rev"
+    review.build(qmd, out, width=320)
+    manifest = json.loads((out / "manifest.json").read_text())
+    with pytest.raises(VeditError, match="is now step-04-b.png, not step-04-c.png"):
+        review.remove_image(manifest, 5, {"shot": 1, "image": "step-04-c.png"})
+    outside = tmp_path.parent / "elsewhere.png"        # the guide folder is tmp_path itself
+    stale = json.loads(json.dumps(manifest))
+    stale["steps"]["5"]["shots"][1]["image"] = str(outside)
+    with pytest.raises(VeditError, match="outside the guide folder"):
+        review.remove_image(stale, 5, {"shot": 1})
+    # an image line added by hand inside the div, without moving the target's own line
+    lines = review._guide_lines(qmd)
+    open_line, close_line = manifest["steps"]["5"]["div"]
+    blank = next(j for j in range(open_line + 1, close_line) if lines[j].strip() == "")
+    lines[blank] = "![Shot D](g-guide-img/step-04-a.png)"       # same line count, one more image
+    qmd.write_text("\n".join(lines))
+    with pytest.raises(VeditError, match="now holds 3 images, the page knew 2"):
+        review.remove_image(manifest, 5, {"shot": 0})
+    assert (tmp_path / "g-guide-img" / "step-04-a.png").exists()     # nothing moved on a refusal
+
+
+def test_remove_image_preserves_crlf(tmp_path, media):
+    qmd = make_guide(tmp_path, media.video)
+    crlf = qmd.read_bytes().replace(b"\n", b"\r\n")
+    qmd.write_bytes(crlf)
+    out = tmp_path / "rev"
+    review.build(qmd, out, width=320)
+    manifest = json.loads((out / "manifest.json").read_text())
+    review.remove_image(manifest, 5, {"shot": 1})
+    after = qmd.read_bytes()
+    assert b"\r\n" in after and b"\n" not in after.replace(b"\r\n", b"")
+    assert b"layout-ncol" not in after
+
+
+def test_remove_image_refuses_when_the_guide_has_changed(tmp_path, media):
+    qmd = make_guide(tmp_path, media.video)
+    out = tmp_path / "rev"
+    review.build(qmd, out, width=320)
+    manifest = json.loads((out / "manifest.json").read_text())
+    qmd.write_text("extra line\n" + qmd.read_text())
+    with pytest.raises(VeditError, match="changed since the review page was built"):
+        review.remove_image(manifest, 5, {"shot": 1})
+
+
+def test_apply_all_replays_an_add_then_a_remove(tmp_path, media):
+    qmd = make_guide(tmp_path, media.video)
+    out = tmp_path / "rev"
+    review.build(qmd, out, width=320)
+    log = {"5": [{"action": "add", "at": 18, "caption": "Shot C"},
+                 {"action": "remove", "shot": 1}]}
+    (out / "review.json").write_text(json.dumps(log))
+    lines = review.apply_all(out)
+    assert lines[0].startswith("step 5: added ")
+    assert lines[1] == "step 5: removed step-04-b.png (moved to review/removed/)"
+    manifest = json.loads((out / "manifest.json").read_text())
+    assert len(manifest["steps"]["5"]["shots"]) == 2
+    text = qmd.read_text()
+    assert "layout-ncol=2" in text and "step-04-b.png" not in text
+
+
+def test_served_remove_reloads_and_a_second_removal_refuses(tmp_path, media):
+    qmd = make_guide(tmp_path, media.video)
+    out = tmp_path / "rev"
+    review.build(qmd, out, width=320, serve=True)
+    server = review.serve(out, 0, quiet=True)
+    port = server.server_address[1]
+    try:
+        def post(body):
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/decide", method="POST",
+                                         data=json.dumps(body).encode(),
+                                         headers={"content-type": "application/json"})
+            return json.loads(urllib.request.urlopen(req).read())
+
+        reply = post({"step": 5, "shot": 1, "action": "remove"})
+        assert reply["ok"] and reply["reload"] is True
+        assert reply["message"] == "removed step-04-b.png (moved to review/removed/)"
+        manifest = json.loads((out / "manifest.json").read_text())
+        assert len(manifest["steps"]["5"]["shots"]) == 1              # rebuilt, div unwrapped
+        log = json.loads((out / "review.json").read_text())
+        assert log["5"][0]["action"] == "remove"
+
+        bad = post({"step": 2, "shot": 0, "action": "remove"})        # step 2 has only one shot
+        assert not bad["ok"] and "only one image" in bad["error"]
+        log = json.loads((out / "review.json").read_text())
+        assert log["2"][0]["error"] == bad["error"]
+    finally:
+        server.shutdown()
+
+
 def test_add_image_caption_cannot_break_the_image_line(tmp_path, media):
     qmd = make_guide(tmp_path, media.video)
     out = tmp_path / "rev"

@@ -161,11 +161,13 @@ def test_no_sidecar_shot_has_no_controls(steps, tmp_path, info, source):
 
 
 def test_apply_undo_clear_buttons_present(steps, tmp_path, info, source):
+    # Undo/Clear keep their classes (`undobox`/`clearboxes`) but read "Undo last"/"Clear
+    # all" since Phase 9 — they cover arrow entries too, not just boxes.
     out = render_page(steps, tmp_path, info, source, serve=True)
     for step, shot in [(1, 0), (1, 1), (2, 0)]:
         assert f'<button class="apply" data-step="{step}" data-shot="{shot}">Apply</button>' in out
-        assert f'<button class="undobox" data-step="{step}" data-shot="{shot}">Undo box</button>' in out
-        assert f'<button class="clearboxes" data-step="{step}" data-shot="{shot}">Clear boxes</button>' in out
+        assert f'<button class="undobox" data-step="{step}" data-shot="{shot}">Undo last</button>' in out
+        assert f'<button class="clearboxes" data-step="{step}" data-shot="{shot}">Clear all</button>' in out
 
 
 def test_seed_json_round_trips_boxes_and_crop(steps, tmp_path, info, source):
@@ -228,6 +230,102 @@ def test_serve_flag_and_frame_dims(steps, tmp_path, info, source):
     assert "const SERVE = true;" in served
     assert "const SERVE = false;" in static
     assert f"const FRAME_W = {info.width}, FRAME_H = {info.height};" in served
+
+
+def test_arrow_tool_button_present(steps, tmp_path, info, source):
+    out = render_page(steps, tmp_path, info, source, serve=True)
+    assert out.count('<button class="tool" data-tool="arrow"') == 3   # one per sidecar'd shot
+    assert re.search(r'<button class="tool" data-tool="arrow"[^>]*>Arrow</button>', out)
+    # Box, Arrow, Crop, in that order, for the same shot.
+    order = re.search(
+        r'data-tool="box"[^>]*>Box</button>\s*'
+        r'<button class="tool" data-tool="arrow"[^>]*>Arrow</button>\s*'
+        r'<button class="tool" data-tool="crop"[^>]*>Crop</button>',
+        out,
+    )
+    assert order
+
+
+def test_seed_with_arrow_entry_survives_escaping(tmp_path, info, source):
+    img_dir = tmp_path / "guide-img"
+    img_dir.mkdir()
+    shot = make_shot(
+        "a", "Arrow shot", img_dir / "step-09-a.jpg", at=12.0,
+        candidates=[12.0], thumbs=["cand-09-0.jpg"], plain="plain-09-0.jpg",
+        boxes=[{"shape": "arrow", "x1": 10, "y1": 20, "x2": 400, "y2": 300,
+                "label": "</SCRIPT><b>Weird</b>"}],
+    )
+    step = make_step(9, "Arrow step", [shot])
+    out = render_page([step], tmp_path, info, source, serve=True)
+    seed = _seed(out, 9, 0)
+    assert seed["boxes"] == shot.boxes
+    assert seed["boxes"][0]["shape"] == "arrow"
+    raw = re.search(r'class="seed" data-step="9" data-shot="0">(.*?)</script>', out, re.S).group(1)
+    assert "<" not in raw                                # every < is <, whatever the tag's case
+
+
+def test_draft_line_counts_arrows_separately(tmp_path, info, source):
+    img_dir = tmp_path / "guide-img"
+    img_dir.mkdir()
+    shot = make_shot(
+        "a", "Mixed shot", img_dir / "step-10-a.jpg", at=72.6,
+        candidates=[72.6], thumbs=["cand-10-0.jpg"], plain="plain-10-0.jpg",
+        boxes=[
+            {"x": 1, "y": 2, "w": 3, "h": 4},
+            {"shape": "arrow", "x1": 0, "y1": 0, "x2": 10, "y2": 10},
+        ],
+    )
+    step = make_step(10, "Mixed step", [shot])
+    out = render_page([step], tmp_path, info, source, serve=True)
+    assert (
+        '<p class="draft" data-step="10" data-shot="0">'
+        'moment 72.6 s · 1 box · 1 arrow · crop none · saved</p>'
+    ) in out
+
+
+def test_draft_line_unchanged_when_no_arrows(steps, tmp_path, info, source):
+    # Same fixture, same expected text as test_draft_summary_line_format — pins that
+    # arrow-free draft lines are byte-identical to before Phase 9.
+    out = render_page(steps, tmp_path, info, source, serve=True)
+    assert (
+        '<p class="draft" data-step="1" data-shot="0">'
+        'moment 64 s · 2 boxes · crop 200,400 900x500 · saved</p>'
+    ) in out
+    assert "arrow" not in out.split('<p class="draft" data-step="1" data-shot="0">')[1].split("</p>")[0]
+
+
+def test_remove_button_present_on_two_shot_steps(steps, tmp_path, info, source):
+    # Both fixture steps have two shots (step 2's second shot has no sidecar), so every
+    # shot — sidecar'd or not — gets the button.
+    out = render_page(steps, tmp_path, info, source, serve=True)
+    for step, shot in [(1, 0), (1, 1), (2, 0), (2, 1)]:
+        assert f'<button class="remove" data-step="{step}" data-shot="{shot}" data-image="' in out
+
+
+def test_remove_button_absent_on_single_shot_step(tmp_path, info, source):
+    img_dir = tmp_path / "guide-img"
+    img_dir.mkdir()
+    shot = make_shot("a", "Solo shot", img_dir / "step-11-a.jpg", at=5.0,
+                      candidates=[5.0], thumbs=["cand-11-0.jpg"], plain="plain-11-0.jpg")
+    step = make_step(11, "Solo step", [shot])
+    out = render_page([step], tmp_path, info, source, serve=True)
+    assert 'class="remove"' not in out
+
+
+def test_hint_and_lede_mention_arrows(steps, tmp_path, info, source):
+    out = render_page(steps, tmp_path, info, source, serve=True)
+    assert "box or arrow" in out
+    assert "drag boxes,\narrows or a crop" in out or "drag boxes, arrows or a crop" in out.replace("\n", " ")
+
+
+def test_script_contains_armed_logic_and_arrow_entry_construction(steps, tmp_path, info, source):
+    out = render_page(steps, tmp_path, info, source, serve=True)
+    assert "'armed'" in out
+    assert "Really remove?" in out
+    assert "shape: 'arrow'" in out
+    assert "action: 'remove'" in out
+    assert "image: b.dataset.image" in out and "x.disabled = true" in out
+    assert "const MIN_ARROW = Math.max(24, Math.max(18, 4 * ARROW_T) + 8)" in out
 
 
 def test_node_check_on_extracted_script(steps, tmp_path, info, source):
