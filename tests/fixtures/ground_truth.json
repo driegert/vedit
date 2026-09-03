@@ -1,0 +1,37 @@
+{
+  "_comment": "t = seconds into the setup recording (frames/t<t>.png). anchors: the text a highlight names and where OCR must put it (tol = px slack per edge, default 16); ambiguous ones need near/occurrence; unreadable ones are text OCR is known to miss (a regression here is welcome news). grounding: hand-placed x/y boxes and the verdict the check must give.",
+  "anchors": [
+    {"t": "40",   "text": "Download R-4.6.1 for Windows", "ambiguous": true, "near": [45, 234], "expect": {"x": 45, "y": 234, "w": 369, "h": 21},
+     "note": "the browser tab title repeats the link text; the caller must choose (or name a longer stretch)"},
+    {"t": "64",   "text": "RTools 4.5",                                 "expect": {"x": 25,   "y": 263, "w": 101, "h": 16}},
+    {"t": "72.6", "text": "Rtools45 installer", "ambiguous": true, "near": [360, 690], "expect": {"x": 360, "y": 678, "w": 168, "h": 28}, "tol": 24,
+     "note": "the sentence names the plain installer and the 64-bit ARM one; the caller must choose"},
+    {"t": "121",  "text": "RStudio-2026.08.2-200.exe",                  "expect": {"x": 1180, "y": 516, "w": 296, "h": 16}},
+    {"t": "137",  "text": "Download for x64",                           "expect": {"x": 811,  "y": 716, "w": 203, "h": 20}},
+    {"t": "185",  "text": "Don't create a Start Menu folder",           "expect": {"x": 992,  "y": 862, "w": 210, "h": 13}, "tol": 30},
+    {"t": "195",  "text": "Create a Quick Launch shortcut",             "expect": {"x": 995,  "y": 670, "w": 219, "h": 16}},
+    {"t": "226",  "text": "Install just for you",                       "expect": {"x": 961,  "y": 543, "w": 149, "h": 16}},
+    {"t": "321",  "text": "For anyone who uses this computer (all users)", "expect": {"x": 1010, "y": 652, "w": 330, "h": 20}, "tol": 40},
+    {"t": "876",  "text": "Source",  "ambiguous": true, "near": [653, 460], "expect": {"x": 653, "y": 460, "w": 56, "h": 13}},
+    {"t": "1365", "text": "Preview in Viewer Pane",                     "expect": {"x": 433,  "y": 298, "w": 185, "h": 14}, "tol": 30},
+    {"t": "1194", "text": "install.packages",                           "expect": {"x": 327,  "y": 748, "w": 440, "h": 24}, "tol": 60,
+     "note": "the console prompt: tesseract glues the bracket, quote and first package name onto the word (at confidence 0), so the box runs on past the text"},
+    {"t": "90",   "text": "Download Quarto CLI",     "unreadable": true},
+    {"t": "1035", "text": "quarto uninstall tinytex", "unreadable": true},
+    {"t": "1386", "text": "Restart Extensions",      "unreadable": true}
+  ],
+  "grounding": [
+    {"t": "64",   "label": "Click: RTools 4.5",                 "box": {"x": 20,   "y": 322, "w": 360, "h": 26}, "verdict": "miss",
+     "why": "take 5 step 2: the box sat on the 4.4/4.3 rows and the old check said covered"},
+    {"t": "121",  "label": "Click: RStudio-2026.08.2-200.exe",  "box": {"x": 1175, "y": 478, "w": 310, "h": 32}, "verdict": "not_ok",
+     "why": "take 5 step 4: the outline ran through the filename and the old check said covered"},
+    {"t": "1365", "label": "Click: gear icon",                  "box": {"x": 393,  "y": 165, "w": 50,  "h": 55}, "verdict": "unverified",
+     "why": "'gear' fuzzy-matched 'Sear' (the search box) and the old check sent the box to x 1886"},
+    {"t": "1386", "label": "Click: Restart Extensions",         "box": {"x": 1380, "y": 256, "w": 200, "h": 24}, "verdict": "unverified",
+     "why": "the button caption is unreadable; 'restart' in the banner text used to make this a MISS"},
+    {"t": "185",  "label": "Check: Don't create a Start Menu folder", "box": {"x": 955, "y": 858, "w": 280, "h": 20}, "verdict": "ok"},
+    {"t": "226",  "label": "Pick: Install just for you",        "box": {"x": 930,  "y": 539, "w": 250, "h": 22}, "verdict": "ok"},
+    {"t": "226",  "label": "Pick: Install just for you",        "box": {"x": 180,  "y": 280, "w": 216, "h": 22}, "verdict": "miss",
+     "why": "the reviewer's hint for step 9, applied verbatim"}
+  ]
+}

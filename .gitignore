@@ -24,3 +24,7 @@ wheels/
 # Editor and OS cruft
 .DS_Store
 *.sw?
+
+# Real screencast frames for the OCR fixture tests: extracted from a private video by
+# tests/fixtures/extract.sh, never committed (see tests/fixtures/README.md)
+tests/fixtures/frames/

@@ -5,10 +5,15 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import threading
 from pathlib import Path
 
+threading_event = threading.Event()   # `vedit review --serve` parks the main thread on it
+
 from . import VeditError, __version__
-from . import ground, media, render, snippet as snippet_mod, spec as spec_mod, still as still_mod, transcribe as transcribe_mod
+from . import (ground, media, ocr, render, review as review_mod, sheet as sheet_mod,
+               snippet as snippet_mod, spec as spec_mod, still as still_mod,
+               transcribe as transcribe_mod)
 
 EXAMPLE = {
     "cuts": [["0:00", "1:30"], ["14:05", "end"]],
@@ -34,8 +39,11 @@ STILL_EXAMPLE = {
     "pad": 20,
     "crop": {"margin": 80},
     "max_width": 1280,
-    "notes": "coordinates are full-frame pixels or percentages, measured with grid: true; "
-             "the outline is drawn pad pixels outside them",
+    "notes": "for anything that is text, prefer {\"text\": \"Download\"} and let OCR place the "
+             "box (add \"near\": [x, y] or \"occurrence\": N if it appears more than once); "
+             "x/y/w/h are full-frame pixels or percentages measured with grid: true, for "
+             "icons, buttons and terminal text OCR cannot read. the outline is drawn pad "
+             "pixels outside the box",
 }
 
 
@@ -77,6 +85,41 @@ def _build_parser() -> argparse.ArgumentParser:
     still.add_argument("--dry-run", action="store_true",
                        help="print the resolved plan and exit without rendering")
     still.add_argument("-q", "--quiet", action="store_true", help="suppress the plan")
+
+    ocr_cmd = sub.add_parser("ocr", help="list the text on one frame with its full-frame pixel "
+                                         "boxes: what a still's \"text\" anchor can name, and "
+                                         "the exact on-screen spelling of things")
+    ocr_cmd.add_argument("input", help="the source video, or an image file")
+    ocr_cmd.add_argument("--at", help="the moment, e.g. \"2:29\" or 149 (video input only)")
+    ocr_cmd.add_argument("--grep", metavar="PATTERN",
+                         help="only lines matching this case-insensitive regex")
+
+    sheet_cmd = sub.add_parser("sheet", help="a labelled contact sheet of several moments, "
+                                             "to compare candidate frames in one image")
+    sheet_cmd.add_argument("video")
+    sheet_cmd.add_argument("times", nargs="+", help=f"up to {sheet_mod.MAX_CELLS} times, "
+                                                    "e.g. 64 1:04.5 2:10")
+    sheet_cmd.add_argument("-o", "--output", required=True, help="the .jpg or .png to write")
+    sheet_cmd.add_argument("--cols", type=int, default=sheet_mod.DEFAULT_COLS,
+                           help=f"cells per row (default {sheet_mod.DEFAULT_COLS})")
+    sheet_cmd.add_argument("--width", type=int, default=sheet_mod.DEFAULT_WIDTH,
+                           help=f"width of one cell in px (default {sheet_mod.DEFAULT_WIDTH})")
+
+    rev = sub.add_parser("review", help="a click-driven review page for a guide's screenshots: "
+                                        "keep, pick another moment, or draw the box; --serve "
+                                        "applies each decision on the spot")
+    rev.add_argument("guide", help="the .qmd guide whose images to review")
+    rev.add_argument("-o", "--output", help="folder for the page and its frames "
+                                            "(default: <guide>-review/ beside the guide)")
+    rev.add_argument("--video", help="the source video, if the sidecars do not name it")
+    rev.add_argument("--width", type=int, default=review_mod.DEFAULT_WIDTH,
+                     help=f"width of the frames on the page (default {review_mod.DEFAULT_WIDTH})")
+    rev.add_argument("--serve", action="store_true",
+                     help="serve the page on localhost and apply decisions as they are made")
+    rev.add_argument("--port", type=int, default=review_mod.DEFAULT_PORT)
+    rev.add_argument("--apply", action="store_true",
+                     help="apply the decisions saved in <output>/review.json and exit "
+                          "(for a page that was not served)")
 
     snip = sub.add_parser("snippet",
                           help="emit paste-ready HTML: a pinned Vidstack player with the "
@@ -177,38 +220,129 @@ def _cmd_still(args) -> int:
     still_mod.render(info, spec, out)
     width, height = still_mod.output_size(spec, info)
     print(f"wrote {out} ({width}x{height})", file=sys.stderr)
+    measured = [h for h in spec.highlights if h.text is None]
     if spec.highlights and not spec.grid:
         from dataclasses import replace
         check = out.with_name(f"{out.stem}.check{out.suffix}")
         still_mod.render(info, replace(spec, grid=still_mod.DEFAULT_GRID), check)
-        print(f"wrote {check} -- the measuring copy: the same still with the labelled "
-              f"pixel grid over your highlights. read THIS file to verify the boxes "
-              f"(the grid labels give the corrected x/y if one missed); embed only "
-              f"{out.name}.", file=sys.stderr)
-
-    # Deterministic grounding: OCR the frame and measure whether each labelled box covers
-    # the text its label names. Findings only — the render stands either way.
-    if any(h.label for h in spec.highlights):
-        if ground.available():
-            for line in ground.report(ground.check(spec, info)):
-                print(line, file=sys.stderr)
-        elif not args.quiet:
-            print("grounding  tesseract not found (or VEDIT_NO_OCR set); skipping the OCR "
-                  "check of the highlight boxes", file=sys.stderr)
+        if measured:
+            print(f"wrote {check} -- the measuring copy: the same still with the labelled "
+                  f"pixel grid over your highlights. read THIS file to verify the "
+                  f"{len(measured)} box(es) you placed by x/y; embed only {out.name}.",
+                  file=sys.stderr)
+        else:
+            print(f"wrote {check} -- the gridded copy. every box here was placed by OCR on "
+                  f"its text, so you need not read it; embed only {out.name}.", file=sys.stderr)
 
     # The sidecar: the spec written back beside the image, with the source and output
-    # recorded, so every screenshot stays reproducible and tweakable. Skipped when the
-    # spec argument already *is* the sidecar (re-running from one must not rewrite it
-    # mid-read); "source"/"output" are accepted-and-ignored keys, so it is a valid spec.
+    # recorded — and, for a text anchor, where OCR put it — so every screenshot stays
+    # reproducible and tweakable. Skipped when the spec argument already *is* the sidecar
+    # (re-running from one must not rewrite it mid-read); "source"/"output"/"resolved"
+    # are accepted keys, so it is a valid spec.
     sidecar = out.with_name(f"{out.stem}.json")
     if args.spec == "-" or Path(args.spec).resolve() != sidecar.resolve():
-        record = dict(raw_spec)
+        record = json.loads(json.dumps(raw_spec))
+        for item, h in zip(record.get("highlights") or [], spec.highlights):
+            if isinstance(item, dict) and h.resolved is not None:
+                r = h.resolved
+                item["resolved"] = {"x": r.x, "y": r.y, "w": r.w, "h": r.h}
         record["source"] = args.input
         record["output"] = str(out)
         sidecar.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
         print(f"wrote {sidecar} -- this still's recipe (spec + source). to tweak the "
               f"shot later, edit it and re-run: vedit still {args.input} {sidecar} "
               f"-o {out}", file=sys.stderr)
+
+    # Grounding, last so a `| tail` still shows the verdict: OCR the frame and measure
+    # whether each hand-placed, labelled box covers the text its label names. Findings
+    # only — the render stands either way. Text-anchored boxes were placed by OCR and
+    # are only counted.
+    anchored = len(spec.highlights) - len(measured)
+    findings: list[ground.Finding] = []
+    if any(h.label for h in measured):
+        if ground.available():
+            findings = ground.check(spec, info)
+            for line in ground.report(findings):
+                print(line, file=sys.stderr)
+        elif not args.quiet:
+            print("grounding  tesseract not found (or VEDIT_NO_OCR set); skipping the OCR "
+                  "check of the x/y boxes", file=sys.stderr)
+    if findings or anchored:
+        print(ground.summary(findings, anchored), file=sys.stderr)
+    print(out)
+    return 0
+
+
+def _cmd_ocr(args) -> int:
+    info = media.probe(args.input, still=True)
+    if not ocr.available():
+        raise VeditError("OCR needs tesseract on PATH (and VEDIT_NO_OCR unset)")
+    frame = None
+    if info.is_image:
+        if args.at is not None:
+            raise VeditError(f"{info.path.name} is an image, so --at does not apply; drop it")
+        header = f"{info.path.name}  {info.width}x{info.height}  (image)"
+    else:
+        if args.at is None:
+            raise VeditError('needs --at: the moment to read, e.g. --at "2:29" or --at 149')
+        frame, at = still_mod.frame_at(args.at, info, where="--at")
+        header = f"{info.path.name}  {info.width}x{info.height}  frame {frame} at {at:.3f}s"
+    rows = ocr.rows_for(info, frame)
+    lines = ocr.dump(rows, args.grep)
+    print(f"{header}  {len(lines)} line(s)" + (f" matching {args.grep!r}" if args.grep else "")
+          + "  (tesseract, tiled 3x; boxes are full-frame pixels)", file=sys.stderr)
+    for line in lines:
+        print(line)
+    if not lines:
+        print("(nothing readable" + (" matched" if args.grep else "") + ")", file=sys.stderr)
+    print("note: OCR often misses light-on-dark button captions, icons and terminal text; "
+          "a control absent here may still be on screen — grab the gridded frame to see it.",
+          file=sys.stderr)
+    return 0
+
+
+def _cmd_review(args) -> int:
+    guide = Path(args.guide)
+    if not guide.exists():
+        raise VeditError(f"guide does not exist: {guide}")
+    out_dir = Path(args.output) if args.output else guide.with_name(f"{guide.stem}-review")
+    if args.apply:
+        for line in review_mod.apply_all(out_dir):
+            print(line, file=sys.stderr)
+        print(out_dir / "review.json")
+        return 0
+    video = Path(args.video) if args.video else None
+    page = review_mod.build(guide, out_dir, video=video, width=args.width, serve=args.serve)
+    print(f"wrote {page}", file=sys.stderr)
+    if not args.serve:
+        print("open it in a browser; save its JSON as review.json beside it, then "
+              f"`vedit review {guide} --apply`", file=sys.stderr)
+        print(page)
+        return 0
+    server = review_mod.serve(out_dir, args.port)
+    url = f"http://127.0.0.1:{args.port}/"
+    print(f"serving {url} — decisions are applied as you make them and saved to "
+          f"{out_dir / 'review.json'}; Ctrl-C to stop", file=sys.stderr)
+    print(url)
+    try:
+        while True:
+            threading_event.wait(3600)      # park the main thread; the server runs on its own
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.shutdown()
+    return 0
+
+
+def _cmd_sheet(args) -> int:
+    info = media.probe(args.video, still=True)
+    if info.is_image:
+        raise VeditError("a sheet needs a video; this is an image")
+    times = sheet_mod.resolve_times(args.times, info)
+    out = sheet_mod.render(info, times, Path(args.output), cols=args.cols, width=args.width)
+    cw, ch = sheet_mod.cell_size(info, args.width)
+    print(f"wrote {out} ({len(times)} frames, {cw}x{ch} each, {args.cols} per row; each cell "
+          f"is stamped with its time)", file=sys.stderr)
     print(out)
     return 0
 
@@ -272,6 +406,12 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_transcribe(args)
         if args.command == "still":
             return _cmd_still(args)
+        if args.command == "ocr":
+            return _cmd_ocr(args)
+        if args.command == "sheet":
+            return _cmd_sheet(args)
+        if args.command == "review":
+            return _cmd_review(args)
         if args.command == "snippet":
             return _cmd_snippet(args)
         if args.command == "example":

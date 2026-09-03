@@ -11,6 +11,12 @@ frame is cropped: the agent measures on the frame it looked at and the crop is a
 last, so nothing has to be re-derived after zooming in. The highlights must lie inside
 the crop; a highlight the crop would remove is an error, not a silent omission.
 
+A highlight is placed one of two ways. `"text": "RTools 4.5"` names the control's
+on-screen text and OCR finds it (`ocr.locate`) — the agent never types pixels for
+anything that is text, which is where every mis-placed box came from. `x`/`y`/`w`/`h`
+is for what OCR cannot read (icons, light-on-dark button captions, terminal text),
+measured on the gridded frame; those boxes get the grounding check after the render.
+
 All the geometry (dim, outlines, grid lines) is one `geq` pass in rgb24. ffmpeg has no
 ellipse filter, and drawbox/drawgrid only take YUV, so a single expression keeps the
 frame in one colour space until the encoder.
@@ -28,7 +34,8 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import VeditError
+from . import VeditError, ocr
+from .geometry import Rect
 from .media import MediaInfo, ffmpeg, probe, run
 from .spec import _number, _reject_unknown, parse_time
 
@@ -38,8 +45,11 @@ OUTPUT_SUFFIXES = {".jpg", ".jpeg", ".png"}
 # a valid spec.
 TOP_LEVEL_KEYS = {"at", "highlights", "dim", "crop", "grid", "max_width", "pad", "notes",
                   "source", "output"}
-HIGHLIGHT_KEYS = {"shape", "x", "y", "w", "h", "color", "thickness", "label", "pad"}
+HIGHLIGHT_KEYS = {"shape", "x", "y", "w", "h", "color", "thickness", "label", "pad",
+                  "text", "near", "occurrence", "resolved"}
 RECT_KEYS = {"x", "y", "w", "h"}
+ANCHOR_KEYS = {"near", "occurrence", "resolved"}     # only meaningful beside "text"
+MIN_TEXT = 3
 CROP_KEYS = RECT_KEYS | {"margin"}
 SHAPES = {"box", "ellipse"}
 DEFAULT_GRID = 10
@@ -57,26 +67,6 @@ GRID_LINE = 2
 COLOR_PATTERN = re.compile(r"^(?:#[0-9A-Fa-f]{6}|0x[0-9A-Fa-f]{6}|[A-Za-z][A-Za-z0-9]*)$")
 
 
-@dataclass(frozen=True)
-class Rect:
-    x: int
-    y: int
-    w: int
-    h: int
-
-    @property
-    def right(self) -> int:
-        return self.x + self.w
-
-    @property
-    def bottom(self) -> int:
-        return self.y + self.h
-
-    def contains(self, other: "Rect") -> bool:
-        return (self.x <= other.x and self.y <= other.y
-                and other.right <= self.right and other.bottom <= self.bottom)
-
-
 @dataclass
 class Highlight:
     shape: str
@@ -91,6 +81,8 @@ class Highlight:
     rgb: tuple[int, int, int]
     thickness: int
     label: str | None = None
+    text: str | None = None                 # the on-screen text this box was placed on, if any
+    resolved: Rect | None = None            # where OCR found it (== target); recorded in the sidecar
 
 
 @dataclass
@@ -103,6 +95,21 @@ class StillSpec:
     crop_note: str = ""
     grid: int = 0                           # divisions; 0 = off
     max_width: int | None = None
+    notes: list[str] = field(default_factory=list)   # things worth printing with the plan
+
+
+def frame_at(value, info: MediaInfo, *, where: str = "at") -> tuple[int, float]:
+    """The frame index a time lands on, and that frame's own time.
+
+    ffmpeg's -ss yields the first frame whose time is >= the seek point, so a time inside
+    the last frame has no frame after it: refuse it now instead of an empty render later.
+    """
+    at = parse_time(value, info, where=where)
+    frame = math.ceil(at * float(info.fps) - 1e-6)
+    if at >= info.duration or frame >= info.total_frames:
+        raise VeditError(f"{where}: {value!r} is at or past the last frame of the "
+                         f"{info.duration:.2f}s source")
+    return frame, frame / float(info.fps)
 
 
 @functools.lru_cache(maxsize=None)
@@ -176,6 +183,55 @@ def _rect(item: dict, info: MediaInfo, *, where: str, minimum: int) -> Rect:
     return Rect(x, y, w, h)
 
 
+def _anchor_text(item: dict, *, where: str) -> str:
+    text = item["text"]
+    if not isinstance(text, str) or len(text.strip()) < MIN_TEXT:
+        raise VeditError(f"{where}.text: the control's on-screen text, at least {MIN_TEXT} "
+                         f"characters (got {text!r})")
+    clash = RECT_KEYS & set(item)
+    if clash:
+        raise VeditError(f'{where}: give either "text" (OCR places the box) or "x"/"y"/"w"/"h" '
+                         f'(a box you measured), not both (got {sorted(clash)} beside "text")')
+    return text.strip()
+
+
+def _locate(item: dict, text: str, info: MediaInfo, spec: StillSpec, pad: int, *, where: str) -> Rect:
+    """Where the anchor text is on the frame, via OCR; the sidecar's earlier answer is
+    compared so a re-render that lands somewhere else is called out."""
+    if not ocr.available():
+        raise VeditError(f'{where}.text: placing a box by its text needs tesseract on PATH (and '
+                         f'VEDIT_NO_OCR unset). Install it, or give "x", "y", "w", "h" measured '
+                         f'on the gridded frame instead.')
+    near = None
+    if item.get("near") is not None:
+        n = item["near"]
+        if not isinstance(n, list) or len(n) != 2:
+            raise VeditError(f"{where}.near: expected [x, y] in frame pixels (got {n!r})")
+        near = (_coord(n[0], info.width, where=f"{where}.near[0]"),
+                _coord(n[1], info.height, where=f"{where}.near[1]"))
+    occurrence = None
+    if item.get("occurrence") is not None:
+        occurrence = _integer(item["occurrence"], where=f"{where}.occurrence", low=1, high=99)
+    hit = ocr.locate(text, ocr.rows_for(info, spec.frame), near=near, occurrence=occurrence,
+                     where=f"{where}.text")
+    target = hit.rect
+    previous = item.get("resolved")
+    if isinstance(previous, dict) and RECT_KEYS <= set(previous):
+        try:
+            old = _rect(previous, info, where=f"{where}.resolved", minimum=1)
+        except VeditError:
+            old = None
+        if old is not None:
+            drift = max(abs(old.x - target.x), abs(old.y - target.y),
+                        abs(old.right - target.right), abs(old.bottom - target.bottom))
+            if drift > pad:
+                spec.notes.append(
+                    f"{where}: {text!r} now resolves to {ocr.describe(target)}, but the sidecar "
+                    f"recorded {ocr.describe(old)} — the frame or the OCR reading changed by "
+                    f"{drift} px; look at the result before embedding it")
+    return target
+
+
 def _bounding_box(rects: list[Rect]) -> Rect:
     x0 = min(r.x for r in rects)
     y0 = min(r.y for r in rects)
@@ -209,16 +265,7 @@ def from_dict(raw, info: MediaInfo, *, origin: str = "spec") -> StillSpec:
         if "at" not in raw:
             raise VeditError(f'{origin}: needs "at" — the moment to take the frame from, '
                              f'e.g. "2:29" or 149')
-        at = parse_time(raw["at"], info, where="at")
-        # ffmpeg's -ss yields the first frame whose time is >= the seek point, so a time
-        # inside the last frame has no frame after it. Resolve to that frame index now
-        # and refuse when there is none, instead of an empty render later.
-        frame = math.ceil(at * float(info.fps) - 1e-6)
-        if at >= info.duration or frame >= info.total_frames:
-            raise VeditError(f"at: {raw['at']!r} is at or past the last frame of the "
-                             f"{info.duration:.2f}s source")
-        spec.frame = frame
-        spec.at = frame / float(info.fps)
+        spec.frame, spec.at = frame_at(raw["at"], info)
 
     highlights = raw.get("highlights")
     if highlights is not None and not isinstance(highlights, list):
@@ -243,10 +290,25 @@ def from_dict(raw, info: MediaInfo, *, origin: str = "spec") -> StillSpec:
         shape = str(item.get("shape", "box")).lower()
         if shape not in SHAPES:
             raise VeditError(f"{where}.shape: {shape!r} is not valid. Use one of {sorted(SHAPES)}")
-        target = _rect(item, info, where=where, minimum=MIN_HIGHLIGHT)
         pad = default_pad
         if item.get("pad") is not None:
             pad = _integer(item["pad"], where=f"{where}.pad", low=0, high=MAX_PAD)
+        text = None
+        if "text" in item:
+            text = _anchor_text(item, where=where)
+            target = _locate(item, text, info, spec, pad, where=where)
+        else:
+            stray = ANCHOR_KEYS & set(item)
+            if stray:
+                raise VeditError(f'{where}: {sorted(stray)} only make sense beside "text"')
+            if not RECT_KEYS & set(item):
+                raise VeditError(
+                    f'{where}: say where the box goes. Either "text": "<the control\'s on-screen '
+                    f'text>" (OCR places it — use this for anything that is text) or "x", "y", '
+                    f'"w", "h" in frame pixels measured on the gridded frame (for icons, buttons '
+                    f'and terminal text OCR cannot read).'
+                )
+            target = _rect(item, info, where=where, minimum=MIN_HIGHLIGHT)
         grown = Rect(target.x - pad, target.y - pad, target.w + 2 * pad, target.h + 2 * pad)
         x0, y0 = max(0, grown.x), max(0, grown.y)
         x1, y1 = min(info.width, grown.right), min(info.height, grown.bottom)
@@ -268,9 +330,12 @@ def from_dict(raw, info: MediaInfo, *, origin: str = "spec") -> StillSpec:
                 raise VeditError(f"{where}.label: must not be empty; drop the key instead")
             if len(label) > 80:
                 raise VeditError(f"{where}.label: keep it under 80 characters (got {len(label)})")
+        elif text is not None:
+            label = text
         spec.highlights.append(Highlight(shape=shape, rect=rect, extent=extent, target=target,
                                          pad=pad, color=color, rgb=rgb, thickness=thickness,
-                                         label=label))
+                                         label=label, text=text,
+                                         resolved=target if text is not None else None))
 
     if "dim" in raw:
         dim = _number(raw["dim"], where="dim")
@@ -484,6 +549,8 @@ def plan(spec: StillSpec, info: MediaInfo) -> list[str]:
     for h in spec.highlights:
         t, r = h.target, h.extent
         line = f"highlight  {h.shape:<8} x {t.x} y {t.y} w {t.w} h {t.h}"
+        if h.text is not None:
+            line = f"highlight  {h.shape:<8} text {h.text!r} -> x {t.x} y {t.y} w {t.w} h {t.h} (OCR)"
         if h.pad:
             line += f"  pad {h.pad} -> x {r.x} y {r.y} w {r.w} h {r.h}"
         lines.append(line + f"  {h.color}  thickness {h.thickness}"
@@ -501,6 +568,7 @@ def plan(spec: StillSpec, info: MediaInfo) -> list[str]:
     if width != source_w:
         lines.append(f"scale      {width}x{height}  (max_width {spec.max_width})")
     lines.append(f"estimate   {width}x{height}")
+    lines += [f"note       {note}" for note in spec.notes]
     return lines
 
 
