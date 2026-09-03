@@ -1,8 +1,9 @@
 """Grounding for `vedit still`: does a hand-placed box cover the text its label names?
 
 Only boxes given as `x`/`y`/`w`/`h` are checked — a `text`-anchored highlight was placed
-by OCR in the first place (see `ocr.locate`). The check is advisory: findings go to
-stderr after the `wrote` lines, and a MISS tells the caller to *look* at the gridded
+by OCR in the first place (see `ocr.locate`), and an arrow points at something rather
+than covering it, so there is no coverage to measure. The check is advisory: findings
+go to stderr after the `wrote` lines, and a MISS tells the caller to *look* at the gridded
 `.check` twin (or switch the highlight to a `text` anchor), never to move the box to a
 number it has not seen. The render stands either way.
 
@@ -83,13 +84,17 @@ def check_highlight(index: int, h: Highlight, rows: list[list[ocr.Word]]) -> Fin
     return Finding(index, label, None, None, None, None, None, 0)
 
 
+def _checkable(h: Highlight) -> bool:
+    """Hand-placed, labelled, and enclosing something — an arrow covers no text."""
+    return bool(h.label) and h.text is None and h.shape != "arrow"
+
+
 def check_rows(spec: StillSpec, rows: list[list[ocr.Word]]) -> list[Finding]:
-    return [check_highlight(i, h, rows) for i, h in enumerate(spec.highlights)
-            if h.label and h.text is None]
+    return [check_highlight(i, h, rows) for i, h in enumerate(spec.highlights) if _checkable(h)]
 
 
 def check(spec: StillSpec, info: MediaInfo) -> list[Finding]:
-    if not any(h.label and h.text is None for h in spec.highlights):
+    if not any(_checkable(h) for h in spec.highlights):
         return []
     return check_rows(spec, ocr.rows_for(info, spec.frame))
 

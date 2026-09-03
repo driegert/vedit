@@ -220,7 +220,10 @@ def _cmd_still(args) -> int:
     still_mod.render(info, spec, out)
     width, height = still_mod.output_size(spec, info)
     print(f"wrote {out} ({width}x{height})", file=sys.stderr)
-    measured = [h for h in spec.highlights if h.text is None]
+    # Only the shapes that enclose something are counted: an arrow is neither a box to
+    # verify nor one OCR "placed", so it belongs in neither half of the summary.
+    boxes = [h for h in spec.highlights if h.shape in still_mod.AREA_SHAPES]
+    measured = [h for h in boxes if h.text is None]
     if spec.highlights and not spec.grid:
         from dataclasses import replace
         check = out.with_name(f"{out.stem}.check{out.suffix}")
@@ -243,9 +246,16 @@ def _cmd_still(args) -> int:
     if args.spec == "-" or Path(args.spec).resolve() != sidecar.resolve():
         record = json.loads(json.dumps(raw_spec))
         for item, h in zip(record.get("highlights") or [], spec.highlights):
-            if isinstance(item, dict) and h.resolved is not None:
+            if not isinstance(item, dict):
+                continue
+            if h.resolved is not None:
                 r = h.resolved
                 item["resolved"] = {"x": r.x, "y": r.y, "w": r.w, "h": r.h}
+            # A measured arrow's x1..y2 already are the spec; only a text-anchored one
+            # has endpoints nobody could read back off the file.
+            if h.line is not None and h.text is not None:
+                x1, y1, x2, y2 = h.line
+                item["line"] = {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
         record["source"] = args.input
         record["output"] = str(out)
         sidecar.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
@@ -257,7 +267,7 @@ def _cmd_still(args) -> int:
     # whether each hand-placed, labelled box covers the text its label names. Findings
     # only — the render stands either way. Text-anchored boxes were placed by OCR and
     # are only counted.
-    anchored = len(spec.highlights) - len(measured)
+    anchored = len(boxes) - len(measured)
     findings: list[ground.Finding] = []
     if any(h.label for h in measured):
         if ground.available():

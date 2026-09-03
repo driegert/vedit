@@ -45,6 +45,13 @@ DEFAULT_PAD = 8  # max(6, round(360 / 48)) for the 640x360 fixture
 ELLIPSE = {"shape": "ellipse", "x": 330, "y": 10, "w": 80, "h": 80, "thickness": 4, "color": "red",
            "pad": 0}
 
+# An arrow crosses several colour bars, so no single background makes it hard to see;
+# the tests below compare against the *plain* grab rather than to a fixed colour.
+ARROW = {"shape": "arrow", "x1": 100, "y1": 100, "x2": 300, "y2": 100, "color": "#0000ff"}
+ARROW_T = 4     # arrow_thickness(640, 360) = max(4, round(360 / 135))
+ARROW_L = 18    # max(18, 4 * 4)
+ARROW_HW = 9    # max(9, 2 * 4)
+
 
 def run_still(workdir: Path, source: Path, spec: dict, out: Path,
               *extra: str) -> subprocess.CompletedProcess:
@@ -159,6 +166,33 @@ BAD_SPECS = [
         lambda: {"at": True}),
     ("spec is a JSON list",
         lambda: [{"at": 0}]),
+    ("x1 on a box",
+        lambda: {"at": 0, "highlights": [{"shape": "box", "x": 0, "y": 0, "w": 10, "h": 10,
+                                          "x1": 5}]}),
+    ("length on a box",
+        lambda: {"at": 0, "highlights": [{"shape": "box", "x": 0, "y": 0, "w": 10, "h": 10,
+                                          "length": 90}]}),
+    ("line on a measured box",
+        lambda: {"at": 0, "highlights": [{"shape": "box", "x": 0, "y": 0, "w": 10, "h": 10,
+                                          "line": {"x1": 1, "y1": 1, "x2": 9, "y2": 9}}]}),
+    ("x/y/w/h on an arrow",
+        lambda: {"at": 0, "highlights": [dict(ARROW, x=10, y=10, w=20, h=20)]}),
+    ("pad on an arrow",
+        lambda: {"at": 0, "highlights": [dict(ARROW, pad=4)]}),
+    ("from on a measured arrow",
+        lambda: {"at": 0, "highlights": [dict(ARROW, **{"from": "left"})]}),
+    ("arrow missing an endpoint",
+        lambda: {"at": 0, "highlights": [{"shape": "arrow", "x1": 100, "y1": 100, "x2": 300}]}),
+    ("arrow too short for a head",
+        lambda: {"at": 0, "highlights": [{"shape": "arrow", "x1": 100, "y1": 100, "x2": 115,
+                                          "y2": 100}]}),
+    ("arrow endpoint past the frame",
+        lambda: {"at": 0, "highlights": [{"shape": "arrow", "x1": 100, "y1": 100, "x2": 700,
+                                          "y2": 100}]}),
+    ("dim with arrows only",
+        lambda: {"at": 0, "highlights": [ARROW], "dim": 0.4}),
+    ("arrow outside an explicit crop",
+        lambda: {"at": 0, "highlights": [ARROW], "crop": {"x": 0, "y": 0, "w": 60, "h": 60}}),
 ]
 
 BAD_SPEC_NEEDLES = [
@@ -171,6 +205,10 @@ BAD_SPEC_NEEDLES = [
     "whole number", "whole number between 2 and 25", "whole number between 2 and 25",
     "not a number", "must be between 64 and 8192", "boolean", "must be between 0% and 100%",
     "past the last frame", "boolean", "must be a JSON object",
+    '"x1" only makes sense with shape arrow', "text-anchored arrow", 'beside "text"',
+    "not a rectangle", "no interior to stand off from", "text-anchored arrow",
+    "missing ['y2']", "too short to draw a head", "must be between 0 and 640",
+    "arrows do not enclose anything", "(arrow 100,100 -> 300,100) lies outside the crop",
 ]
 
 assert len(BAD_SPECS) == len(BAD_SPEC_NEEDLES)
@@ -684,3 +722,183 @@ def test_sidecar_does_not_clobber_a_spec_at_its_own_path(media, tmp_path):
     proc = run_still(tmp_path, media.video, spec, tmp_path / "spec.png")
     assert proc.returncode == 0, proc.stderr
     assert json.loads((tmp_path / "spec.json").read_text()) == spec
+
+
+# ---- the arrow highlight ----------------------------------------------------------------
+#
+# An arrow points at something instead of enclosing it, so "is this pixel the arrow?" is
+# answered by comparing against the plain grab of the same frame -- the testsrc2 bars run
+# through pure blue, and a fixed-colour comparison would pass over one of them by accident.
+
+def painted(out: Path, source: Path, x: int, y: int) -> bool:
+    """True when the render differs from the untouched source frame at that pixel."""
+    return pixel(out, 0, x, y) != pixel(source, 0, x, y)
+
+
+def unit(spec: dict) -> tuple[float, float]:
+    dx, dy = spec["x2"] - spec["x1"], spec["y2"] - spec["y1"]
+    length = (dx * dx + dy * dy) ** 0.5
+    return dx / length, dy / length
+
+
+ARROWS = {
+    "horizontal": ARROW,
+    "vertical": dict(ARROW, x1=420, y1=300, x2=420, y2=120),
+    "diagonal": dict(ARROW, x1=100, y1=60, x2=260, y2=200),
+    "diagonal back": dict(ARROW, x1=600, y1=330, x2=460, y2=230),
+}
+
+
+@pytest.mark.parametrize("name", sorted(ARROWS))
+def test_arrow_draws_a_shaft_and_a_head_between_its_endpoints(tmp_path, media, name):
+    a = ARROWS[name]
+    out = render_still(tmp_path, media.video, {"at": 0, "highlights": [a]}, f"{name}.png")
+    ux, uy = unit(a)
+
+    # The shaft: its midpoint is drawn, and 2 head-widths off to the side is not.
+    mid = (round((a["x1"] + a["x2"] - ARROW_L * ux) / 2),
+           round((a["y1"] + a["y2"] - ARROW_L * uy) / 2))
+    assert painted(out, media.video, *mid), "the shaft midpoint was not drawn"
+    assert_rgb(pixel(out, 0, *mid), (0, 0, 255), msg="shaft midpoint colour")
+    off = (round(mid[0] - uy * 2 * ARROW_HW), round(mid[1] + ux * 2 * ARROW_HW))
+    assert not painted(out, media.video, *off), f"a pixel {2 * ARROW_HW} px off the shaft was drawn"
+
+    # Inside the head, 40% of the head's length back from the tip.
+    head = (round(a["x2"] - ux * ARROW_L * 0.4), round(a["y2"] - uy * ARROW_L * 0.4))
+    assert painted(out, media.video, *head), "the head interior was not drawn"
+    assert_rgb(pixel(out, 0, *head), (0, 0, 255), msg="head colour")
+
+    # The ends land where the spec said: drawn up to the tip, nothing past it; drawn at
+    # the tail, nothing 4 px behind it.
+    for step in (-4, -1, 0):
+        p = (round(a["x2"] + ux * step), round(a["y2"] + uy * step))
+        assert painted(out, media.video, *p), f"the tip is short by {-step} px"
+    for step in (1, 2, 4):
+        p = (round(a["x2"] + ux * step), round(a["y2"] + uy * step))
+        assert not painted(out, media.video, *p), f"the head runs {step} px past the tip"
+    assert painted(out, media.video, a["x1"], a["y1"]), "the tail pixel was not drawn"
+    behind = (round(a["x1"] - ux * 4), round(a["y1"] - uy * 4))
+    assert not painted(out, media.video, *behind), "the shaft runs past the tail"
+
+
+def test_an_arrow_leaves_the_rest_of_the_frame_alone(tmp_path, media):
+    out = render_still(tmp_path, media.video, {"at": 0, "highlights": [ARROW]})
+    for x, y in [(0, 0), (639, 359), (320, 300), (500, 50)]:
+        assert_rgb(pixel(out, 0, x, y), pixel(media.video, 0, x, y), msg=f"({x},{y})")
+
+
+def test_arrows_and_boxes_render_together(tmp_path, media):
+    out = render_still(tmp_path, media.video, {"at": 0, "highlights": [BOX, ARROW], "dim": 0.5})
+    assert_rgb(pixel(out, 0, BOX["x"], BOX["y"]), (0, 0, 255), msg="the box ring")
+    assert_rgb(pixel(out, 0, 150, 100), (0, 0, 255), msg="the arrow shaft")
+
+    # dim is legal again once one highlight encloses something, and the arrow is not it:
+    # the box interior stays bright, the frame around the arrow does not.
+    inside = (BOX["x"] + BOX["w"] // 2, BOX["y"] + BOX["h"] // 2)
+    assert_rgb(pixel(out, 0, *inside), pixel(media.video, 0, *inside), msg="inside the box")
+    beside = (250, 100 + 2 * ARROW_HW)      # clear of the box's x range, 125..205
+    assert_rgb(pixel(out, 0, *beside),
+               tuple(round(c * 0.5) for c in pixel(media.video, 0, *beside)),
+               msg="beside the arrow, dimmed")
+
+
+def test_an_arrow_label_sits_beyond_the_tail(tmp_path, media):
+    """The label goes behind the tail, away from what the arrow points at."""
+    a = dict(ARROW, label="Click Install")
+    out = render_still(tmp_path, media.video, {"at": 0, "highlights": [a]})
+    assert resolution(out) == (640, 360)
+
+    size = max(16, round(360 / 36))         # _label_filters
+    pad = max(4, size // 4)
+    # Centred on tail - u * (size + 2*pad) = (100 - 28, 100) for this horizontal arrow.
+    behind = region_mean(out, 0, 100 - 28 - 20, 100 - size // 2, 100 - 28 + 20, 100 + size // 2)
+    ahead = region_mean(out, 0, 200, 100 - 40, 240, 100 - 20)
+    assert behind < ahead, "no dark label box behind the tail"
+
+
+def test_an_arrow_label_is_clamped_into_the_frame(tmp_path, media):
+    """A tail near the edge would put the label off-screen; it is pulled back in."""
+    a = {"shape": "arrow", "x1": 20, "y1": 180, "x2": 220, "y2": 180, "label": "Start here"}
+    out = render_still(tmp_path, media.video, {"at": 0, "highlights": [a]})
+    assert resolution(out) == (640, 360)
+    size = max(16, round(360 / 36))
+    pad = max(4, size // 4)
+    # Centred at x = 20 - 28, which is off the left edge: clamped to a pad's margin.
+    boxed = region_mean(out, 0, pad, 180 - size // 2, pad + 30, 180 + size // 2)
+    plain = region_mean(media.video, 0, pad, 180 - size // 2, pad + 30, 180 + size // 2)
+    assert boxed < plain, "the label was drawn off the left edge instead of clamped"
+
+
+def test_arrow_appears_in_the_plan(tmp_path, media):
+    proc = run_still(tmp_path, media.video,
+                     {"at": 0, "highlights": [dict(ARROW, label="Click Install")]},
+                     tmp_path / "out.png", "--dry-run")
+    assert proc.returncode == 0, proc.stderr
+    assert ("highlight  arrow    from x 100 y 100 to x 300 y 100  #0000ff  thickness 4  "
+            "'Click Install'") in proc.stderr
+
+
+def test_crop_margin_boxes_an_arrow_by_its_extent(tmp_path, media):
+    margin = 20
+    out = render_still(tmp_path, media.video,
+                       {"at": 0, "highlights": [ARROW], "crop": {"margin": margin}})
+    # arrow_extent grows the endpoints' bounding box by max(hw, t) + 1 = 10 on every side.
+    grow = ARROW_HW + 1
+    assert resolution(out) == (200 + 2 * grow + 2 * margin, 2 * grow + 2 * margin)
+
+
+def test_an_explicit_crop_may_hold_an_arrow_exactly(tmp_path, media):
+    grow = ARROW_HW + 1
+    crop = {"x": 100 - grow, "y": 100 - grow, "w": 200 + 2 * grow, "h": 2 * grow}
+    out = render_still(tmp_path, media.video, {"at": 0, "highlights": [ARROW], "crop": crop})
+    assert resolution(out) == (crop["w"], crop["h"])
+
+
+# ---- the pure geometry helpers Builder B's review server imports -------------------------
+
+def test_arrow_thickness_scales_with_the_frame():
+    from vedit import still as still_mod
+    assert still_mod.arrow_thickness(1920, 1080) == 8
+    assert still_mod.arrow_thickness(640, 360) == 4
+    assert still_mod.arrow_thickness(120, 90) == 4          # never hairline
+    assert still_mod.arrow_thickness(3840, 2160) == 16
+    assert still_mod.arrow_head(8) == (32, 16)
+    assert still_mod.arrow_head(1) == (18, 9)               # the floors bite on a thin shaft
+
+
+def test_arrow_extent_grows_the_endpoints_and_clamps_to_the_frame():
+    from vedit import still as still_mod
+    from vedit.geometry import Rect
+
+    grow = 10                                              # max(hw=9, t=4) + 1
+    assert still_mod.arrow_extent(100, 100, 300, 100, 4, 640, 360) == \
+        Rect(100 - grow, 100 - grow, 200 + 2 * grow, 2 * grow)
+    # Direction does not matter: the bounding box is unordered.
+    assert still_mod.arrow_extent(300, 100, 100, 100, 4, 640, 360) == \
+        still_mod.arrow_extent(100, 100, 300, 100, 4, 640, 360)
+    # A thicker shaft reaches further, because the head is wider.
+    assert still_mod.arrow_extent(100, 100, 300, 100, 20, 640, 360) == \
+        Rect(100 - 41, 100 - 41, 200 + 82, 82)
+    # Clamped at every edge, never negative.
+    assert still_mod.arrow_extent(0, 0, 630, 350, 4, 640, 360) == Rect(0, 0, 640, 360)
+    assert still_mod.arrow_extent(5, 5, 40, 40, 4, 640, 360) == Rect(0, 0, 50, 50)
+
+
+@pytest.mark.parametrize("name,a", [
+    # Pointing left and up: the label goes to the right of / below the tail, which is
+    # where the shaft is. Centring the box on a point beyond the tail was not enough --
+    # a label wider than that standoff was drawn back over the shaft.
+    ("leftwards", {"shape": "arrow", "x1": 500, "y1": 180, "x2": 220, "y2": 180,
+                   "color": "#0000ff", "label": "Click: RTools 4.5"}),
+    ("upwards", {"shape": "arrow", "x1": 420, "y1": 330, "x2": 420, "y2": 120,
+                 "color": "#0000ff", "label": "Click: RTools 4.5"}),
+])
+def test_a_label_never_covers_its_own_shaft(tmp_path, media, name, a):
+    out = render_still(tmp_path, media.video, {"at": 0, "highlights": [a]}, f"{name}.png")
+    ux, uy = unit(a)
+    span = round(((a["x2"] - a["x1"]) ** 2 + (a["y2"] - a["y1"]) ** 2) ** 0.5)
+    # Every pixel on the centre line between tail and tip is shaft or head, so every one
+    # of them is still the arrow colour: nothing was drawn over it.
+    for step in range(2, span - 1, 8):
+        p = (round(a["x1"] + ux * step), round(a["y1"] + uy * step))
+        assert_rgb(pixel(out, 0, *p), (0, 0, 255), msg=f"{name}: shaft at {p} was covered")

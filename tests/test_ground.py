@@ -250,3 +250,115 @@ def test_text_anchor_needs_tesseract(tmp_path, media):
                            "-o", str(tmp_path / "out.png")], capture_output=True, text=True, env=env)
     assert proc.returncode == 1 and "needs tesseract" in proc.stderr
     assert not (tmp_path / "out.png").exists()
+
+
+# ---- arrows: placed by text like a box, but never grounded -------------------------------
+#
+# An arrow points at something instead of covering it, so there is no coverage to measure
+# and nothing for `ground` to say. The endpoints it actually drew go in the sidecar as
+# `line`, so a later reader (the review server, a re-render) never recomputes them.
+
+def test_ground_skips_arrows_entirely():
+    rows = ocr.lines(row(262, "RTools", "4.5", x0=25))
+    spec = still.from_dict({"highlights": [
+        {"shape": "arrow", "x1": 400, "y1": 900, "x2": 640, "y2": 760, "label": "RTools 4.5"},
+        {"x": 20, "y": 255, "w": 360, "h": 30, "label": "RTools 4.5"},
+    ]}, FakeInfo(), origin="test")
+    findings = ground.check_rows(spec, rows)
+    assert [f.index for f in findings] == [1], "the arrow was grounded"
+    assert findings[0].ok is True
+
+
+def test_ground_summary_never_mentions_an_arrow():
+    spec = still.from_dict({"highlights": [
+        {"shape": "arrow", "x1": 400, "y1": 900, "x2": 640, "y2": 760, "label": "Install"},
+    ]}, FakeInfo(), origin="test")
+    assert ground.check_rows(spec, ocr.lines(row(100, "Install"))) == []
+    assert ground.summary([], 0) == "grounding  "
+
+
+@pytest.mark.skipif(not HAS_TESSERACT, reason="tesseract not installed")
+@pytest.mark.parametrize("side", ["left", "right", "above", "below"])
+def test_a_text_anchored_arrow_stops_short_of_the_word_it_names(tmp_path, side):
+    img = draw_text_image(tmp_path / "ui.png")
+    info = media.probe(img, still=True)
+    spec = still.from_dict(
+        {"highlights": [{"shape": "arrow", "text": "Download RStudio", "from": side}]},
+        info, origin="test")
+    h = spec.highlights[0]
+    found, (x1, y1, x2, y2) = h.resolved, h.line
+    assert h.side == side and h.pad == 0
+    assert abs(found.x - 100) <= 6 and abs(found.y - 200) <= 10, "OCR did not find the text"
+
+    gap = max(6, round(max(6, round(400 / 48)) / 2))       # default_pad / 2 on a 800x400 frame
+    length = max(60, round(400 / 9))
+    if side in ("left", "right"):
+        # The tip stops `gap` short of the near edge, centred on it; the tail is further out.
+        near = found.x - gap if side == "left" else found.right + gap
+        assert (x2, y2) == (near, round(found.centre[1]))
+        assert x1 == near - length if side == "left" else x1 == near + length
+        assert y1 == y2, "a left/right arrow is horizontal"
+    else:
+        near = found.y - gap if side == "above" else found.bottom + gap
+        assert (x2, y2) == (round(found.centre[0]), near)
+        assert y1 == near - length if side == "above" else y1 == near + length
+        assert x1 == x2, "an above/below arrow is vertical"
+    # The tip is outside the text it points at, on the named side.
+    assert not found.contains(still.Rect(x2, y2, 1, 1))
+
+
+@pytest.mark.skipif(not HAS_TESSERACT, reason="tesseract not installed")
+def test_a_text_arrow_records_its_endpoints_in_the_sidecar(tmp_path):
+    img = draw_text_image(tmp_path / "ui.png")
+    spec = tmp_path / "s.json"
+    spec.write_text(json.dumps({"highlights": [
+        {"shape": "arrow", "text": "Restart Extensions", "from": "below", "label": "Click it"},
+        {"shape": "arrow", "x1": 100, "y1": 350, "x2": 300, "y2": 350},
+    ]}))
+    out = tmp_path / "out.png"
+    proc = subprocess.run([sys.executable, "-m", "vedit.cli", "still", str(img), str(spec),
+                           "-o", str(out)], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    assert "text 'Restart Extensions' from below -> tip x" in proc.stderr and "(OCR)" in proc.stderr
+    assert "highlight  arrow    from x 100 y 350 to x 300 y 350" in proc.stderr
+    # Neither arrow is a box: nothing is "placed by OCR", nothing is unverified, so the
+    # grounding summary is not printed at all.
+    assert "grounding" not in proc.stderr
+
+    record = json.loads((tmp_path / "out.json").read_text())
+    anchored, measured = record["highlights"]
+    assert set(anchored["line"]) == {"x1", "y1", "x2", "y2"}
+    assert abs(anchored["resolved"]["x"] - 450) <= 6
+    assert anchored["line"]["x1"] == anchored["line"]["x2"], "a 'below' arrow is vertical"
+    assert anchored["line"]["y1"] > anchored["line"]["y2"], "it comes from below the text"
+    assert "line" not in measured, "a measured arrow's x1..y2 already are the spec"
+
+    # The sidecar is still a valid spec: `line` is accepted and ignored, and re-rendering
+    # from it reproduces the image byte for byte.
+    again = tmp_path / "again.png"
+    proc = subprocess.run([sys.executable, "-m", "vedit.cli", "still", str(img),
+                           str(tmp_path / "out.json"), "-o", str(again)],
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    assert again.read_bytes() == out.read_bytes()
+
+
+@pytest.mark.skipif(not HAS_TESSERACT, reason="tesseract not installed")
+def test_an_arrow_with_no_room_names_the_side_to_try_instead(tmp_path):
+    img = tmp_path / "edge.png"
+    subprocess.run([media.ffmpeg(), "-y", "-v", "error", "-f", "lavfi",
+                    "-i", "color=c=white:s=800x400", "-frames:v", "1", "-update", "1",
+                    "-vf", "drawtext=text='Toolbar Button':x=300:y=2:fontsize=26:fontcolor=black",
+                    str(img)], check=True)
+    info = media.probe(img, still=True)
+    with pytest.raises(Exception) as exc:
+        still.from_dict({"highlights": [{"shape": "arrow", "text": "Toolbar Button",
+                                         "from": "above"}]}, info, origin="test")
+    assert "room before the frame edge" in str(exc.value)
+    assert 'try "from": "below"' in str(exc.value)
+
+    # From below there is room, and a shorter `length` is honoured.
+    spec = still.from_dict({"highlights": [{"shape": "arrow", "text": "Toolbar Button",
+                                            "from": "below", "length": 40}]}, info, origin="test")
+    x1, y1, x2, y2 = spec.highlights[0].line
+    assert y1 - y2 == 40 and x1 == x2
