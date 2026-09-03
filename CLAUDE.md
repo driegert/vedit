@@ -13,7 +13,10 @@ vedit example                                            # print a starter spec
 vedit apply lecture.mp4 edits.json -o out.mp4 --dry-run  # resolve times, estimate, no render
 vedit apply lecture.mp4 edits.json -o out.mp4            # render
 vedit transcribe lecture.mp4 -o transcript.txt           # [m:ss] one line per sentence
-vedit still lecture.mp4 still.json -o step.jpg           # one frame: highlights, dim, crop, grid (+ .check twin, .json sidecar, OCR grounding)
+vedit still lecture.mp4 still.json -o step.jpg           # one frame: highlights (placed by "text" via OCR, or x/y/w/h), dim, crop, grid (+ .check twin, .json sidecar, grounding)
+vedit ocr lecture.mp4 --at 64 [--grep rtools]            # the frame's text with full-frame pixel boxes: what a "text" anchor can name
+vedit sheet lecture.mp4 1035 1037 1040 -o sheet.jpg       # a stamped contact sheet of several moments
+vedit review lecture-guide.qmd --serve                    # click-driven review of a guide's screenshots; decisions re-render the stills
 vedit example --still                                    # a starter still spec
 vedit snippet out.mp4 --url https://videos.example.org/x.mp4  # paste-ready LMS embed HTML
 uv tool install --editable .                             # reinstall after changing code
@@ -35,9 +38,15 @@ vedit/
     spec.py         # JSON spec parsing + strict validation, time parsing
     render.py       # the pipeline: spans, slides, concat
     transcribe.py   # `vedit transcribe`: faster-whisper server, sentence timestamps
+    geometry.py     # Rect, shared by still (what is drawn) and ocr (what was read)
+    ocr.py          # tesseract passes, line grouping, the strict matcher, locate() for text anchors, the dump
+    ground.py       # the advisory check on hand-placed (x/y) boxes: does the outline cover the label's text?
+    sheet.py        # `vedit sheet`: a labelled contact sheet of several moments
+    review.py       # `vedit review`: guide parsing, the frame cache, the server, and decision application (moment / box / crop / add)
+    review_page.py  # the review page itself: HTML + inline CSS/JS, duck-typed against review.Step/Shot
     still.py        # `vedit still`: one annotated frame (or image) for illustrated guides
     snippet.py      # `vedit snippet`: paste-ready LMS embed HTML with inlined chapters
-    cli.py          # argparse entry point: apply / probe / transcribe / still / snippet / example
+    cli.py          # argparse entry point: apply / probe / transcribe / still / ocr / sheet / review / snippet / example
   skills/edit-video/SKILL.md   # the agent-facing skill (symlinked out, see below)
 ```
 
@@ -149,7 +158,139 @@ outside an explicit crop is an error, not a silent omission. `grid: true` render
 labelled pixel grid for the measuring pass — the agent reads coordinates off it, then
 re-renders without it. An image input (by suffix) skips `at` and `-ss`. Every successful render writes the spec back as a **sidecar** (`step.jpg` → `step.json`, the raw spec plus `source`/`output` metadata keys the parser accepts and ignores, so a sidecar is itself a valid spec) for later reproduction or tweaking; the write is skipped when the spec argument already *is* the sidecar, and the `.check` twin gets none.
 
-**Grounding (`ground.py`, 2026-08-31).** A VLM asked "is the box on the right thing?" says yes whenever the box is in the right neighbourhood — a five-model pilot that day caught semantic misses (wrong row, wrong button) well and pixel geometry badly (~2 of 16 corrections within a dozen px). Screenshots are flat, so the geometric half has a deterministic answer: with `tesseract` on `PATH`, every labelled highlight is OCR-grounded after the render. The label is reduced to the on-screen text it names (`queries_for`: quoted text, else strip `1.`/`Click`/`Pick:`, else split on ` - `/`: `), and two OCR passes look for it — the **region around the drawn box at 3x first** (tesseract's full-frame pass drops small button text: `Next`/`Back` were invisible at 1x), then the whole frame to say where the text really is. Tolerances are the point: a mouse cursor turned `Document` into `Docurt` at confidence 0, so tokens match on a shared prefix (≥ 4 chars and ≥ 60% of the shorter) or 0.75 similarity, a line qualifies at half its tokens, and a conf-0 word may stand in for the next token. `COVERED = 0.85` of the found phrase box inside `Highlight.rect` passes; below 0.5 is `LIKELY MISS`, between is `CLIPS the text`; one short generic word (`Next`, `OK`) found only far away is *inconclusive*, never a miss. Findings go to stderr and never fail the render. Known blind spot, by design: the same text on two rows (`Windows 11` exe/zip) passes with an "appears 2x" note — that is the reviewer subagent's job.
+**Text anchors and grounding (`ocr.py`, `ground.py`; 2026-08-31, redesigned 2026-09-01).** The
+first design OCR-*checked* boxes the model had placed by hand, and its first real run (take 5
+of the Windows R setup guide) came out worse than the run before it: the check passed a box
+on the wrong row (a half-score "RTools" inside the box beat a full-score "RTools 4.5" two rows
+up), sent a box to the search field ("gear" fuzzy-matched "Sear" at 0.75), called a button a
+MISS because "restart" sat in a banner while the white-on-blue caption was unreadable, and
+measured coverage against the padded rectangle so an outline through the text still passed —
+and its lines printed *before* the `wrote` lines, so a `| tail -2` hid them. The redesign is
+subtractive: the model names *what* and OCR decides *where*. A highlight may be
+`{"text": "RTools 4.5"}` (plus `near: [x, y]` or `occurrence: N` when the words appear more
+than once — a browser tab title repeats the page's link, "Source" is on every pane); `locate`
+resolves it or raises an error naming the candidates, or the five closest lines and the
+`x/y/w/h` fallback. The sidecar records the `resolved` rect and a re-run warns if it moved by
+more than `pad`. `vedit ocr` prints the same lines for the model to choose from.
+
+Reading: three tesseract passes merged — 960x540 tiles with 320 px overlap at 3x (any word up
+to 320 px wide sits whole in some tile, away from the edges tesseract reads badly), the same
+on the *inverted* frame (a dark-theme console reads as light-on-dark and is otherwise
+dropped), and a plain 1x pass (which reads underlined links the upscale spoils) — about
+20 s at 1080p, once per still (`rows_for` caches). Dedupe keeps one reading per box, drops
+specks (under 7x4 px), fragments of a bigger reading ("RStudio-2026" inside the filename,
+cut at a tile edge) and tall boxes spanning two lines; every rule that guessed "the less
+confident nested one is junk" deleted a real word somewhere on the fixture frames, so junk
+read off a real word's pixels stays and is merely barred from *starting* a line in
+`lines()` (words are grouped left to right — top to bottom split a line whenever
+baselines differed by a pixel).
+
+Matching: a token that is short (under 5 chars) or carries a digit matches exactly only,
+with l/I/O/o/@ folded to digits in digit-bearing tokens; a missing digit-bearing token voids
+the candidate; an exact match scores 1 whatever tesseract's confidence (it scores words it
+does not know, `install.packages`, at 0), a near match 0.9 ("installed" for "installer"
+ranks below the exact one on the same line), a conf-0 word may stand in for a long token,
+up to two junk words between matches are skipped, a token OCR split is rejoined by squashed
+comparison, and a long word that *starts* with the token is the token with glued characters
+— never the reverse, which is how the truncated reading once passed for the `.exe`. Every
+occurrence on a line is a separate hit. `locate` needs 0.75 (one dropped "you" of four) and
+prefers exact readings when any exist. `ground` checks only hand-placed labelled boxes: an
+in-box hit counts only if nothing on the frame scores higher, a MISS needs a full-score
+hit, a fragment elsewhere is "could not verify", coverage is measured inside the outline
+(thickness + 4 px), the lines print *after* the `wrote` lines with a one-line summary, and a
+MISS says to anchor by `text` or read the twin — never "set x y". Known blind spots, by
+design and by measurement: white-on-blue button captions and icons; those stay measured.
+
+Fixtures: `tests/fixtures/ground_truth.json` (committed) against real frames of the setup
+recording (`tests/fixtures/frames/`, gitignored, `extract.sh`); `test_fixtures.py` skips
+without them. The cases are the take 5 false verdicts and the text each step should anchor
+to, including the ones OCR is known not to read — when one of those starts resolving, move
+it up. Expect readings to shift when the tile geometry or passes change: every rule above
+was adjusted against those frames, not reasoned out.
+
+**Review (`review.py`, 2026-09-02).** The last judgement the pipeline could not make:
+whether a frame is the *useful* one. In take 6 the model's text-picked moments were right
+except where a terminal had scrolled (the box landed on the cmd.exe title bar, the only
+place OCR could read "quarto install tinytex") or the console was mid-spew; fixing those
+used to mean typing to the model. `vedit review guide.qmd` parses the guide's images in
+order (with the heading above each), extracts the plain frame at each sidecar's `at` and
+up to four candidates (±3 s, the scene change before and after from `scenes.txt` + 1 s),
+and writes `<guide>-review/review.html` + `manifest.json`. The page (inline CSS/JS, no
+dependencies) offers Keep / Use this moment / drag a box on the plain frame (coordinates
+scaled back to full-frame pixels) / a label / a note. `--serve` runs a stdlib
+`ThreadingHTTPServer` on 127.0.0.1 that serves the guide folder (refusing anything that
+resolves outside it), records every decision in `review.json`, and applies moment and box
+decisions immediately: `apply_decision` edits the sidecar (`at`; or `highlights` replaced
+by one x/y/w/h box keeping the old label, and an explicit crop replaced by a margin crop
+since it may not contain the new box; a text anchor's `resolved` dropped so it re-resolves)
+and re-runs `vedit still` in a subprocess, returning the image URL for the page to reload.
+Without `--serve`, the page collects the JSON in a textarea and `vedit review --apply`
+replays it. Geometry never goes back through the model; the `note` field is for it, once.
+
+**Round two (2026-09-02, after first use).** Three asks from the first session: a moment
+click gave no visible sign it worked and left the drawing frame at the old moment; there
+was no way to change a crop; and a step could not hold two screenshots (the Rtools step
+wants the version list *and* the installer link on the next page). So: the page half moved
+to `review_page.py` (duck-typed against `Step`/`Shot`, never imports `review`), frames
+are cached by time (`frame-{t:g}.jpg` at page width, `thumb-{t:g}.jpg` at half) so a
+rebuild after an add costs only the new shot, and `GET /frame?at=T` extracts on demand.
+A moment click marks the candidate, swaps the plain frame to that moment (no box), shows
+a busy overlay until the re-rendered still has loaded, and blocks drawing until the new
+frame is in. A Box/Crop toggle per shot: a crop drag sets an explicit `crop`, "No crop"
+removes it, "Margin crop" sets `{"margin": 160}`; a box drawn inside an explicit crop
+keeps the crop (only a crop that no longer contains the box falls back to the margin).
+"New image" mode stages a moment + optional box/crop, "Add image" posts `action: add`:
+`add_image` renders `<stem>-b.jpg` (then `-c`, `-d`; a suffix is skipped if its image,
+sidecar, or `.check` twin exists), then edits the `.qmd` by line index — wrapping the
+step's image line in `::: {layout-ncol=2}` … `:::` with blank lines around it, or
+inserting before the closing `:::` of an existing div and bumping `layout-ncol` (max 3)
+— and `parse_guide` groups a layout div's images into one step (keys a, b, c). The edit
+is validated against the file before *and after* the render (the manifest's line numbers
+are only good while the guide is as it was built), inserted lines take the anchor line's
+CRLF/LF, and the write goes through a temp file + rename; so does `review.json`, which
+is now a log — one ordered list per step — with a refused decision kept and marked
+`error` so `--apply` skips it, and `apply_all` rebuilding the manifest after each add so
+a second add lands after the first. The GET handler admits the guide folder *or* the
+review folder by path parts (a `-o` outside the guide folder used to 404 its own page).
+Codex reviewed the first cut: the atomic/re-validated splice, the suffix reservation,
+the log write, the still-reload error path and the drawing block came from that round;
+its "grounding can fail after the files are written" finding was set aside (grounding is
+findings-only and returns 0). Tests: `tests/test_review.py` (grouping, the frame cache,
+every decision, the containment rule, a refused crop carrying vedit's message, add
+creating then extending a div byte-for-byte, a fourth refused, CRLF, guide drift, orphan
+suffixes, a mixed log replay, the served round trip with `/frame` caching and an add over
+HTTP, both containment layouts) and `tests/test_review_page.py` (markup ids/classes the
+JS relies on, escaping, and `node --check` on the extracted script).
+
+**Round three (2026-09-02, after a full session of clicking).** The log from that session
+was the brief: three crops refused because a snug crop excludes the 22 px *pad* `vedit
+still` puts round a box; a moment click on a text-anchored still refused ("text not found
+on this frame") while the page's drawing frame had already moved, so the box drawn next
+landed at the old moment; every drag its own render, with the OCR re-resolve on a moment
+change (~20 s) wasted whenever a drawn box replaced the anchor a second later; and one box
+per still. So the page now holds a **draft per shot** — seeded from the sidecar (`Shot.boxes`
+as full-frame rects, a text anchor contributing its `resolved` rect; `Shot.crop`), drawn on
+the canvas at all times, every Box-tool drag *appending* a box with the label field's text,
+Undo/Clear boxes, Crop-tool drags replacing the crop — and one **Apply** posts a single
+`edit` decision with only the dirty fields (`at`, `boxes`, `crop`). Server side `_apply_edit`
+does the work: `boxes` replaces the highlights (`[]` removes them and any margin crop, and
+that invariant is enforced after every field); a rect crop is **grown** to contain each
+highlight's padded extent (pad rule mirrored from `still.py:281`, clamped to the frame) and
+the message says so; a box added under an explicit crop grows that crop instead of Phase 7's
+replace-with-margin; a moment change re-resolves anchors and, when `vedit still` reports
+`highlights[i].text … was not found`, drops that anchor and renders again (once per anchor,
+keyed by index so an apostrophe in the text doesn't matter), dropping `dim` and a margin crop
+when nothing is left; the reply carries the sidecar's resulting `at`/`boxes`/`crop`, read
+back under the lock, and the page adopts them so a grown crop or a dropped anchor shows on
+the canvas. Old `moment`/`box`/`crop` log entries are `edit` with one field. In New-image
+mode the step's canvases share one staged draft, so a moment click swaps all of them and
+switching back to Edit restores each shot's own frame; a draft is frozen while its Apply is
+in flight; a failed Add keeps what was staged; an added caption is flattened to one line
+with `[`/`]` and `"` replaced so it cannot break the image line. The seed JSON escapes every
+`<` as `\u003c` (`</SCRIPT>` closes a script tag too). Codex again: accepted the in-flight
+freeze, the shared-canvas fix, the caption sanitiser, the post-fields invariant, the
+index-keyed recovery, the escaping and the refused-only-is-not-decided nit; set aside, as in
+round two, "grounding can fail after the files are written".
 
 **`pad` (2026-08-30):** the named rectangle is inflated by `pad` px on every side before
 drawing (`Highlight.target` is what the spec said, `Highlight.rect` what is drawn,
@@ -189,7 +330,7 @@ note on stderr. Tests: `tests/test_snippet.py`.
 uv run pytest -k slides     # one area
 ```
 
-200 tests, a couple of minutes — they render real video through the actual CLI, so they catch
+338 tests, about ten minutes (the OCR cases on real frames are ~20 s each) — they render real video through the actual CLI, so they catch
 flag-composition bugs that unit tests would not. Fixtures (a 30s clip with audio, a 30s
 silent clip, a 900x900 RGBA image) are built by ffmpeg once per session in `tests/conftest.py`.
 
@@ -203,7 +344,12 @@ tests/
   test_silent_source.py  # videos with no audio stream
   test_transcribe.py     # verbose_json parsing, window offsets, fail-closed server errors
   test_still.py          # exact ring/dim/crop pixels, output size, image input, the error table
-  test_ground.py         # label->query, fuzzy tokens, line grouping; tesseract on an ffmpeg-drawn image
+  test_ocr.py            # tokens, line grouping, dedupe, the matcher, locate(), the dump; tesseract on an ffmpeg-drawn image
+  test_ground.py         # the verdict logic on synthetic rows; CLI output order; text anchors through the CLI and sidecar
+  test_sheet.py          # contact sheet size and labels
+  test_fixtures.py       # text anchors and verdicts on real screencast frames (skips without tests/fixtures/frames/)
+  test_review.py         # decision application, the .qmd edit for added images, and the served round trip
+  test_review_page.py    # the page's markup contract with its JS, and a node --check of the script
 ```
 
 The invariant is **exact** duration and frame count, never "looks about right" — every

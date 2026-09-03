@@ -223,98 +223,127 @@ ffmpeg -hide_banner -i lecture.mp4 -an -vf "scale=480:-1,select='gt(scene,0.04)'
 
 For each step, the search interval is from the timestamp of the transcript line that
 describes the action to the timestamp of the next line, **plus 10 s**. Take the first screen
-change inside it, grab the frame **one second after it** (dialogs finish drawing) with
-`vedit still`, and `read` it before you embed it — it must show the state the reader is
-meant to reach, not the mouse on its way there:
+change inside it, one second after it (dialogs finish drawing), and **confirm the moment
+by its text, not by looking at it**:
 
 ```bash
-mkdir -p lecture-guide-img
-echo '{"at": 149}' | vedit still lecture.mp4 - -o lecture-guide-img/step-02-download-rstudio.jpg
+vedit ocr lecture.mp4 --at 149 --grep 'download|rstudio'
 ```
 
-**Look at one or two frames per turn, and write down what you saw.** Every frame you
+That prints every line of text on the frame with its full-frame pixel box — a few hundred
+tokens that stay in your context, against 1–2.5k for an image that is soon retired. It
+answers the questions that decide a frame: is the dialog I want on screen (its title and
+its buttons are in the dump)? is the command fully typed (`quarto install tinyte` is not)?
+what exactly does the control say — so the guide writes `rmarkdown` because the screen
+does, not `markdown` because the transcript heard that. Without `--grep` you get the whole
+frame, top to bottom; read it once per new screen. **Names of things come from the
+screen, never from the transcript**: file names, package names, menu items, button
+captions are copied out of the dump. The transcript says what to *say*; the screen says
+what things are *called*.
+
+OCR does miss things — light-on-dark button captions, icons, some terminal text. A control
+absent from the dump may still be on screen. That, and only that, is when you look at a
+picture. When several changes fall close together, or the dump cannot tell two moments
+apart, make one contact sheet and look at that: one `read` for up to twelve candidates,
+each stamped with its time:
+
+```bash
+vedit sheet lecture.mp4 140 144 148 152 156 160 -o sheet_140.jpg
+```
+
+**Look at one or two images per turn, and write down what you saw.** Every image you
 `read` costs 1–2.5k tokens and is re-sent with every request until it is retired: the
 harness sends only the most recent images (six by default) and turns each older one into a
 one-line placeholder naming the file. Once six newer images have arrived, a frame is gone
 from your view, so note its verdict in your reply the moment you look
-(`frame_250: Quarto installer, Finish button — usable`) — and never `read` seven at once,
-since the first would be retired before you saw it, and even with five it is easy to lose
-track of which picture was which. Grab frames you are only *judging* at
-`"max_width": 960`; only the one you embed needs full resolution.
-
-When there are several changes close together, or none, make one contact sheet of the
-interval and pick from it; that is one `read` for six candidates instead of six:
-
-```bash
-ffmpeg -hide_banner -v error -ss 140 -t 20 -i lecture.mp4 -an \
-  -vf "fps=1/4,scale=640:-1,drawtext=text='%{pts\:hms}':x=8:y=8:fontsize=28:fontcolor=yellow:box=1:boxcolor=black@0.6,tile=3x2" \
-  -frames:v 1 -q:v 4 sheet_140.jpg                                      # tiles at +0, +4, … +16 s
-```
+(`sheet_140: the Finish button is up from 148 s — use 149`) — and never `read` seven at
+once, since the first would be retired before you saw it.
 
 ### Drawing the reader's eye
 
 A whole 1920x1080 frame with one small button on it does not tell the reader where to
 look. When a step is about **one control** — a button, a menu item, a field, a checkbox —
-mark it and, usually, crop to it. `vedit still` does both from the same spec. Coordinates
-are always **full-frame pixels** (or percentages), even when cropping — the crop is applied
-last — so you measure once, on the frame you looked at, and never re-derive anything.
+mark it and, usually, crop to it. `vedit still` does both from one spec.
 
-1. **Mark.** Write the spec, `step-02.json`, and run it:
-   ```json
-   {"at": 149,
-    "highlights": [{"x": 1212, "y": 688, "w": 140, "h": 48, "label": "Click DOWNLOAD RSTUDIO"}],
-    "dim": 0.35, "crop": {"margin": 160}, "max_width": 1280}
-   ```
-   ```bash
-   vedit still lecture.mp4 step-02.json -o lecture-guide-img/step-02-download-rstudio.jpg
-   ```
-   Estimate `x`/`y` as best you can — the next step measures them properly. (When you have
-   no idea where the control is, grab the frame with only the grid first:
-   `echo '{"at": 149, "grid": true}' | vedit still lecture.mp4 - -o grid_149.jpg`.)
-2. **Look at the `.check` twin, not the clean file.** Every run with highlights also wrote
-   `step-02-download-rstudio.check.jpg`: the same still with the labelled pixel grid drawn
-   over your boxes. `read` it. Grid lines fall every tenth of the frame and carry their
-   full-frame pixel coordinate, so if the box missed, the correct values are in the same
-   picture — a control between the `1152` and `1344` lines and just under the `648` line
-   is at about `x 1210, y 690`. Fix the spec from the labels, re-run, look again. One
-   correction is normal; a second guess without reading the grid is how boxes end up on
-   the wrong button.
-   The run also prints **`grounding` lines** when `tesseract` is installed: OCR looked for
-   each label's text on screen and reports whether the drawn box covers it. `LIKELY MISS`
-   or `CLIPS the text` comes with the `x`/`y` to set — do that before anything else, then
-   read the twin; `verify by eye` means OCR could not decide, so the twin is the judge.
-   Write the control's **visible text** into the label (`Click Next`, `Pick: Quarto
-   Document`) — that is what the check looks for; a label like `Gear icon` cannot be
-   grounded.
-3. **Embed the clean file.** The `.check` twin is a measuring aid for you — it never
-   appears in the guide.
+**Name the text; never measure it.** For anything that *is* text — a link, a menu item, a
+radio option, a checkbox caption, a file name — the highlight is the control's on-screen
+text and OCR places the box:
 
-Every render also writes the spec back beside the image — `step-02-download-rstudio.json`,
-with `source` and `output` recorded — and the sidecar is itself a valid spec. That is
-each screenshot's recipe: to tweak one later, edit the sidecar and re-run
-`vedit still lecture.mp4 lecture-guide-img/step-02-download-rstudio.json -o lecture-guide-img/step-02-download-rstudio.jpg`.
-The sidecars are part of the guide's working set — keep them with the images, never
-list them among the deletable working files.
+```json
+{"at": 64,
+ "highlights": [{"text": "RTools 4.5", "label": "Click: RTools 4.5"}],
+ "dim": 0.35, "crop": {"margin": 160}, "max_width": 1280}
+```
+```bash
+mkdir -p lecture-guide-img
+vedit still lecture.mp4 step-02.json -o lecture-guide-img/step-02-download-rtools.jpg
+```
 
-If your harness provides a **`still_reviewer` subagent, delegate the look** instead of
-reading the twin yourself: spawn one per image with the two paths (the sidecar and the
-`.check` twin) — several in parallel is fine. An `OK` verdict clears the image without it
-ever entering your context. On a `MISS`, read that one twin yourself and fix the spec from
-the grid labels — the reviewer's suggested coordinates are a hint, not a measurement. Cap
-the loop at two review rounds per image; if the two of you still disagree, keep your own
-reading and note the disagreement in your report.
+Copy the text out of the `vedit ocr` dump as it is printed there. The run either places
+the box — the plan says `text 'RTools 4.5' -> x 25 y 262 w 101 h 17 (OCR)` — or refuses
+with a message that says exactly why:
 
-Give the control's own edges — where the text or button starts and stops — and let `pad`
-provide the breathing room; do not pre-widen `w`/`h` by guesswork. A coordinate read off
-the grid is good to about a dozen pixels, and the default pad absorbs that; if the result
-still clips one side, the coordinate on that side is off — fix it rather than growing the
-box. A box that clears its target by 20 px reads better than one that hugs it anyway: the
-job is to point at the control, not to frame it exactly.
+- *appears N times on screen* — the same words are elsewhere too (a browser tab title
+  repeats the page's link; "Source" is on every pane). The message lists each place with
+  its box: add `"occurrence": 2` (the number in that list) or `"near": [x, y]` (the closest
+  wins), or name a longer stretch of the line so only one matches.
+- *was not found on screen* — with the closest lines it did read. Either your text differs
+  from what is printed (a version number, a hyphen, a wrapped word), or it is a control OCR
+  cannot read. Then, and only then, measure.
+
+A box placed by `text` is done: nothing to verify, nothing to look at. Its `.check` twin is
+still written, but you need not read it.
+
+**Measuring, for what OCR cannot read** — an icon, a light-on-dark button caption, a
+terminal line the dump did not show. Grab the gridded frame and `read` it:
+`echo '{"at": 149, "grid": true}' | vedit still lecture.mp4 - -o grid_149.jpg`. The yellow
+lines fall every tenth of the frame and carry their full-frame pixel coordinate; a control
+between the `1152` and `1344` lines and just under the `648` line is at about
+`x 1210, y 690`. Write `x`/`y`/`w`/`h` from those labels — the control's own edges, where
+the text or button starts and stops; `pad` adds the breathing room, so do not pre-widen
+`w`/`h` by guesswork — and render:
+
+```json
+{"at": 1365,
+ "highlights": [{"x": 393, "y": 165, "w": 50, "h": 55, "label": "Click: gear icon"}],
+ "dim": 0.35, "crop": {"margin": 160}, "max_width": 1280}
+```
+
+Every run with a measured box also writes the `.check` twin — `step-19.check.jpg`, the same
+still with the grid drawn over your boxes — and prints **`grounding` lines**: OCR looked
+for each label's text and says whether the outline encloses it. `LIKELY MISS` / `CLIPS the
+text` means it found the words somewhere else, and names where: read the twin, then either
+switch the highlight to `"text"` (the message shows OCR can read it after all) or fix the
+coordinates from the grid labels. *Could not verify* means OCR has no opinion — the twin is
+the judge. `read` the twin of every measured box, one image per turn, and write the
+verdict into your reply. A coordinate read off the grid is good to about a dozen pixels and
+the default pad absorbs that; if the result still clips one side, that side's coordinate is
+off — fix it rather than growing the box. One correction is normal; a second guess without
+reading the grid is how boxes end up on the wrong button. **Never apply a coordinate you
+were handed without reading the twin** — a number from a checker, a reviewer, or your own
+memory of an earlier frame is a hint, and the grid is the measurement.
+
+Coordinates are always **full-frame pixels** (or percentages), even when cropping — the
+crop is applied last — so nothing is re-derived after zooming in. Embed the clean file;
+the `.check` twin never appears in the guide.
+
+Every render also writes the spec back beside the image — `step-02-download-rtools.json`,
+with `source`, `output` and, for a text anchor, the `resolved` box recorded — and the
+sidecar is itself a valid spec. That is each screenshot's recipe: to tweak one later, edit
+the sidecar and re-run
+`vedit still lecture.mp4 lecture-guide-img/step-02-download-rtools.json -o lecture-guide-img/step-02-download-rtools.jpg`
+(a re-run whose OCR lands somewhere else than the recorded box says so with a `note` line).
+The sidecars are part of the guide's working set — keep them with the images, never list
+them among the deletable working files.
+
+The output of `vedit still` ends with a one-line `grounding` summary on stderr and the
+output path on stdout, in that order — so `2>&1 | tail -2` shows both, and `tail -1` shows
+only the path. If you filter the output, keep `grounding`, `note` and `error` lines.
 
 | Key | Meaning |
 |---|---|
 | `at` | The moment, in source time. Omit when the input is an image (`.jpg`/`.png`) rather than a video. |
-| `highlights[]` | `x`, `y`, `w`, `h` in full-frame pixels or percentages (`"40%"`): the control's **own edges**, not a box around it. `shape` `box` (default) or `ellipse`; `color` (default `red`); `thickness`; `label` — a few words, drawn just above (or below) the shape. |
+| `highlights[]` | Either `text` — the control's on-screen text, copied from `vedit ocr`; OCR places the box, with `near: [x, y]` or `occurrence: N` when it appears more than once — or `x`, `y`, `w`, `h` in full-frame pixels or percentages (`"40%"`) for what OCR cannot read: the control's **own edges**, not a box around it. Never both. `shape` `box` (default) or `ellipse`; `color` (default `red`); `thickness`; `label` — a few words, drawn just above (or below) the shape (defaults to the text). |
 | `pad` | How far the rectangle is inflated on every side before the outline is drawn (an ellipse is inscribed in the inflated rectangle). Top level or per highlight. Default ≈ 22 px at 1080p; raise it to 30–40 for a small control, or to draw the eye to a region rather than frame it exactly. |
 | `dim` | 0–0.95: darken everything *outside* the highlights. 0.3–0.5 is plenty. Needs `highlights`. |
 | `crop` | `{"margin": N}` — the highlights plus N pixels around them (start at 120–200, enough to recognise the window) — or explicit `{"x", "y", "w", "h"}`. Highlights must lie inside it; a crop that would remove one is rejected. |
@@ -352,6 +381,36 @@ user watches the result. When everything is verified, your final report **names*
 be cleaned up (only files you created: explicit names or narrow globs, never a directory)
 and says it is waiting on their review — delete only when the user has looked at the work
 and says so.
+
+### Handing the screenshots to the user for review
+
+Whether a frame is the *useful* one — the typed command rather than the progress bars
+after it, the dialog rather than the second before it — is the reader's judgement, not
+OCR's. So once the guide is rendered, build the review page and offer it:
+
+```bash
+vedit review lecture-guide.qmd --serve        # prints http://127.0.0.1:8765/
+```
+
+The page shows every screenshot in guide order with its caption, the plain frame to
+draw boxes and a crop on, and a few alternative moments (a few seconds either side, the
+nearest screen changes from `scenes.txt`). The user clicks **Keep**, picks a moment,
+draws as many boxes as the step needs and a crop, then **Apply** (one render), or adds
+a second screenshot to a step (**New image** → **Add image**, which writes
+`<stem>-b.jpg` and wraps the step's image line in a `::: {layout-ncol=2}` div); each
+applied decision is written to `<guide>-review/review.json` and the sidecar or the
+guide is edited and the still rendered — so no coordinate or time ever comes back
+through you. A crop the user draws is grown to keep the boxes visible; a text anchor
+that is not on a newly chosen frame is dropped, and the user draws a box instead. Say the URL and stop. When the user
+says the review is done, read `review.json` **once**. It is a log: one list per step,
+in order. Act only on two kinds of entry: an `edit` (or old-style `moment`) that
+carries an `at` — the frame changed, so update that image's caption and alt text to
+match it — and an `add` (the new image line
+is already in the guide with the caption the user typed, or `(caption pending)`; write
+the caption and alt text, and a sentence in the step if the second screen needs one);
+plus any `note`. Entries marked `error` were refused and did nothing. Never re-derive a
+box or a crop from a note when the review already placed it, and never touch the
+`:::` div lines the review wrote.
 
 ## Step 5 — dry run, always
 
@@ -441,9 +500,17 @@ command — do not try to configure credentials yourself.
 | Chapters re-typed into an embed | `vedit snippet` reads them from the rendered file; regenerate, never hand-edit the base64. |
 | Re-measuring highlight coordinates after a crop | Coordinates are always full-frame; the crop is applied last. Measure once, on the gridded full frame. |
 | A gridded frame or a `.check` file in the guide | The grid is for you. Embed the clean output; the `.check` twin stays out. |
-| A highlight nobody looked at | Off by a hundred pixels it boxes the wrong button. `read` the `.check` twin of every annotated still before embedding the clean one. |
+| Typing `x`/`y` for a link, a menu item, a file name | That is text: `"text": "RTools 4.5"` and OCR places the box. Every mis-placed box so far was a model estimating pixels. |
+| A measured box nobody looked at | Off by a hundred pixels it boxes the wrong button. `read` the `.check` twin of every `x`/`y` box before embedding the clean one; a `text` box needs no look. |
+| Applying a coordinate you were handed | A checker's or reviewer's `x`/`y` is a hint; the grid is the measurement. Eleven hinted coordinates were applied verbatim in one run, and all eleven were wrong. |
 | Fixing a missed box by trial and error | The `.check` twin already shows the answer: read the grid labels beside the control and set `x`/`y` once. |
-| Ignoring a `grounding … LIKELY MISS` line | OCR found the label's text where the box is not. Set the printed `x`/`y`, re-run, then read the twin. |
+| Ignoring a `grounding … LIKELY MISS` line | OCR found the label's text where the box is not. Read the twin, then anchor by `text` or re-measure. |
+| Piping `vedit still` through `tail -1` | The grounding summary is the last stderr line and the path is stdout; `tail -1` on the merged stream hides the verdict. `tail -2`, or `grep -E 'grounding\|note\|error'`. |
+| Reading candidate frames one at a time to pick a moment | `vedit ocr --at` first (is the dialog there? is the command fully typed?), `vedit sheet` for the rest; a single frame only when the dump cannot tell. |
+| Package, file and menu names from the transcript | The transcript hears `markdown` for `rmarkdown` and "cable extra" for `kableExtra`. Names come from the `vedit ocr` dump or the frame. |
+| The `install.packages` line from the survey notes | A dependency scrolling past (`gridExtra`) is not what was typed (`kableExtra`). Copy the command from `vedit ocr` at the moment it was typed. |
+| Image files numbered by your own count | `step-16-tinytex.jpg` under `### Step 22` confuses everyone; name each file by the guide step it sits under. |
+| Fixing a "wrong screencap" by guessing again | Offer `vedit review --serve` and let the user click the moment or draw the box; then apply their `review.json` notes to the text only. |
 | Step numbers restarting at 1 in each chapter | One counter for the whole guide: `Step 1`–`Step N` in the `###` headings, continuing across chapter headings. |
 | The `.json` sidecars listed as deletable clutter | Each is a screenshot's recipe, written automatically by `still`. They stay beside the images. |
 | Rewriting the `.qmd` when the linter reports issues | The rewrite reproduces them. `edit` the reported lines, nothing else. |
