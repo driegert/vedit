@@ -292,6 +292,54 @@ freeze, the shared-canvas fix, the caption sanitiser, the post-fields invariant,
 index-keyed recovery, the escaping and the refused-only-is-not-decided nit; set aside, as in
 round two, "grounding can fail after the files are written".
 
+**Round four (2026-09-03): arrows, and removing an image.** Dave's ask after round three was
+"remove an added image" plus arrows if they were cheap. They were: an arrow is one more mask in
+the same `geq` pass (below), so the page's Arrow tool is a drag from tail to tip that pushes
+`{shape: "arrow", x1, y1, x2, y2, label?}` into the same `boxes` draft the Box tool fills, and
+the server's `_parse_boxes` accepts it everywhere `boxes` is read (`edit`, the legacy `box`,
+`add`), sets `dim` only when a box or ellipse is present (an arrow leaves nothing bright, and
+`still` refuses dim with arrows alone), and grows a crop to `still.arrow_extent`. **Remove
+image** is a two-click button on every shot of a step with two or more; the server's
+`remove_image` deletes the image line and the one blank line `add_image` paired it with,
+unwraps the div when one image remains (the outer blank lines stay: they were only added when
+the neighbours were text) or decrements `layout-ncol`, and **moves** the image, sidecar and
+`.check` twin into `<out_dir>/removed/` (`-1`, `-2` on a collision) — never deletes. Add then
+remove gives the original guide back byte for byte, LF and CRLF, for a div created around a
+single image and for one extended. `remove` rebuilds the page like `add` and replies
+`reload: true`; a one-shot step is refused ("remove it by editing the guide"). Built as before:
+contract, three builders (Opus on `still`, Sonnet on server and page), Codex review. Codex's
+catches this time: a quick double click could post a second `remove` against an index the
+rebuild had shifted (the buttons now disable per step until the reply, and the decision
+carries the image name for the server to refuse a mismatch); a hand-added image line inside
+the div passed the drift check (the div's image lines are now recounted); the moved files were
+not bounded to the guide folder (they are); the bundle's collision suffix was chosen per file;
+and the page accepted a 24 px arrow that `still` refuses below 40 at 1080p (same formula on
+both sides now). Set aside: making the guide edit and the file moves one transaction — guide
+first is the safe order (a failed move leaves an unreferenced file, the other order a broken
+image), and a rebuild failure already reads "removed X, but the page could not be rebuilt".
+
+**Arrows (`still.py`, 2026-09-03).** `{"shape": "arrow"}` with either `text` + `from`
+(`left`/`right`/`above`/`below`, default `left`) + `length` (default `max(60, min(w,h)/9)` = 120
+at 1080p) — OCR finds the text, the tip stops `max(6, pad/2)` px short of the near edge's
+midpoint, the tail is `length` further out, clamped to the frame and refused with the side to
+try when that leaves less than the head needs — or measured `x1, y1` (tail) and `x2, y2`
+(tip). Default thickness `max(4, min(w,h)/135)` = 8 at 1080p; head length `max(18, 4t)`,
+half-width `max(9, 2t)`; below `max(24, L + 8)` px there is no room for a head and it is an
+error. The shaft is "distance to the tail→base segment below t/2" (`clip` for the parameter,
+`hypot` for the distance) and the head a filled triangle from three `gte(cross, 0)` half-planes
+with the winding fixed in Python; the apex sits half a pixel past the tip because geq samples
+pixel centres and an apex on an integer coordinate was drawn in three orientations and dropped
+in the fourth. Constants are formatted to three decimals and parenthesised (a `%g` with six
+digits moves a 1080p head edge by a pixel). `arrow_thickness`/`arrow_head`/`arrow_extent` are
+module functions the review server imports; `extent` is the endpoints' bbox grown by
+`max(hw, t) + 1`, `pad` is 0 and refused on arrows (use `length` or move the tail). The label
+sits beyond the tail with its *near* edge `size/2` px off — the box's half-extent along the
+arrow is `(|ux|·tw + |uy|·th)/2` inside the drawtext expression — because centring it a fixed
+distance out put a wide label over the shaft on the first real frame. An arrow contributes
+nothing to the un-dimmed area, so `dim` with arrows only is an error; grounding skips arrows
+and counts only boxes and ellipses; a text arrow's sidecar records `resolved` (the OCR rect) and
+`line` (the endpoints drawn), both accepted-and-ignored keys on input.
+
 **`pad` (2026-08-30):** the named rectangle is inflated by `pad` px on every side before
 drawing (`Highlight.target` is what the spec said, `Highlight.rect` what is drawn,
 `Highlight.extent` the drawn rect clipped to the frame; default `max(6, min(w,h)/48)` ≈ 22
@@ -330,7 +378,7 @@ note on stderr. Tests: `tests/test_snippet.py`.
 uv run pytest -k slides     # one area
 ```
 
-338 tests, about ten minutes (the OCR cases on real frames are ~20 s each) — they render real video through the actual CLI, so they catch
+398 tests, about ten minutes (the OCR cases on real frames are ~20 s each) — they render real video through the actual CLI, so they catch
 flag-composition bugs that unit tests would not. Fixtures (a 30s clip with audio, a 30s
 silent clip, a 900x900 RGBA image) are built by ffmpeg once per session in `tests/conftest.py`.
 
@@ -343,12 +391,12 @@ tests/
   test_safety.py         # source protection, debris, dry-run estimates, probe/example
   test_silent_source.py  # videos with no audio stream
   test_transcribe.py     # verbose_json parsing, window offsets, fail-closed server errors
-  test_still.py          # exact ring/dim/crop pixels, output size, image input, the error table
+  test_still.py          # exact ring/dim/crop pixels, arrow shaft/head/label pixels, output size, image input, the error table
   test_ocr.py            # tokens, line grouping, dedupe, the matcher, locate(), the dump; tesseract on an ffmpeg-drawn image
   test_ground.py         # the verdict logic on synthetic rows; CLI output order; text anchors through the CLI and sidecar
   test_sheet.py          # contact sheet size and labels
   test_fixtures.py       # text anchors and verdicts on real screencast frames (skips without tests/fixtures/frames/)
-  test_review.py         # decision application, the .qmd edit for added images, and the served round trip
+  test_review.py         # decision application, the .qmd edits for added and removed images, and the served round trip
   test_review_page.py    # the page's markup contract with its JS, and a node --check of the script
 ```
 

@@ -343,7 +343,8 @@ only the path. If you filter the output, keep `grounding`, `note` and `error` li
 | Key | Meaning |
 |---|---|
 | `at` | The moment, in source time. Omit when the input is an image (`.jpg`/`.png`) rather than a video. |
-| `highlights[]` | Either `text` — the control's on-screen text, copied from `vedit ocr`; OCR places the box, with `near: [x, y]` or `occurrence: N` when it appears more than once — or `x`, `y`, `w`, `h` in full-frame pixels or percentages (`"40%"`) for what OCR cannot read: the control's **own edges**, not a box around it. Never both. `shape` `box` (default) or `ellipse`; `color` (default `red`); `thickness`; `label` — a few words, drawn just above (or below) the shape (defaults to the text). |
+| `highlights[]` | Either `text` — the control's on-screen text, copied from `vedit ocr`; OCR places the box, with `near: [x, y]` or `occurrence: N` when it appears more than once — or `x`, `y`, `w`, `h` in full-frame pixels or percentages (`"40%"`) for what OCR cannot read: the control's **own edges**, not a box around it. Never both. `shape` `box` (default), `ellipse` or `arrow` (next row); `color` (default `red`); `thickness`; `label` — a few words, drawn just above (or below) the shape (defaults to the text). |
+| `shape: "arrow"` | Points at a control instead of framing it. Name the text and the side it comes from: `{"shape": "arrow", "text": "Install", "from": "left"}` (`from` `left`/`right`/`above`/`below`, default `left`; `length` default ≈ 120 px; the tip stops just short of the text and a side with no room is refused with the side to try). Measured form `x1`, `y1` (tail), `x2`, `y2` (tip) for what OCR cannot read. `label` sits just beyond the tail. No `pad`; never grounded; `dim` needs a box or ellipse besides. |
 | `pad` | How far the rectangle is inflated on every side before the outline is drawn (an ellipse is inscribed in the inflated rectangle). Top level or per highlight. Default ≈ 22 px at 1080p; raise it to 30–40 for a small control, or to draw the eye to a region rather than frame it exactly. |
 | `dim` | 0–0.95: darken everything *outside* the highlights. 0.3–0.5 is plenty. Needs `highlights`. |
 | `crop` | `{"margin": N}` — the highlights plus N pixels around them (start at 120–200, enough to recognise the window) — or explicit `{"x", "y", "w", "h"}`. Highlights must lie inside it; a crop that would remove one is rejected. |
@@ -362,7 +363,8 @@ Embed with a caption that says what the reader should see, and an alt text:
 ```
 
 Whole frames go in at full resolution; an annotated crop can take `"max_width": 1280`.
-Arrows are not available — a box or ellipse with a short label does the job. Aim for one
+A box or ellipse with a short label does most jobs; an arrow (`"shape": "arrow"`, above) is
+for a control that a box would hide or that sits in a crowd of look-alikes. Aim for one
 screenshot per step and stop around 25. If you cannot view images, place each frame by
 timing alone (first change inside the interval, plus one second), skip the highlights,
 and say so when you report.
@@ -395,9 +397,11 @@ vedit review lecture-guide.qmd --serve        # prints http://127.0.0.1:8765/
 The page shows every screenshot in guide order with its caption, the plain frame to
 draw boxes and a crop on, and a few alternative moments (a few seconds either side, the
 nearest screen changes from `scenes.txt`). The user clicks **Keep**, picks a moment,
-draws as many boxes as the step needs and a crop, then **Apply** (one render), or adds
+draws as many boxes and arrows as the step needs and a crop, then **Apply** (one render), or adds
 a second screenshot to a step (**New image** → **Add image**, which writes
-`<stem>-b.jpg` and wraps the step's image line in a `::: {layout-ncol=2}` div); each
+`<stem>-b.jpg` and wraps the step's image line in a `::: {layout-ncol=2}` div), or removes
+one of a step's images (**Remove image**, twice: the image line leaves the guide, the div
+unwraps when one image is left, and the files move to `<guide>-review/removed/`); each
 applied decision is written to `<guide>-review/review.json` and the sidecar or the
 guide is edited and the still rendered — so no coordinate or time ever comes back
 through you. A crop the user draws is grown to keep the boxes visible; a text anchor
@@ -408,7 +412,8 @@ carries an `at` — the frame changed, so update that image's caption and alt te
 match it — and an `add` (the new image line
 is already in the guide with the caption the user typed, or `(caption pending)`; write
 the caption and alt text, and a sentence in the step if the second screen needs one);
-plus any `note`. Entries marked `error` were refused and did nothing. Never re-derive a
+plus any `note`. A `remove` entry needs nothing from you — the image line is already gone —
+unless the step's text described that screen. Entries marked `error` were refused and did nothing. Never re-derive a
 box or a crop from a note when the review already placed it, and never touch the
 `:::` div lines the review wrote.
 
