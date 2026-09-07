@@ -388,11 +388,16 @@ and says so.
 
 Whether a frame is the *useful* one — the typed command rather than the progress bars
 after it, the dialog rather than the second before it — is the reader's judgement, not
-OCR's. So once the guide is rendered, build the review page and offer it:
+OCR's. So once the guide is rendered, start the review server **detached** (it runs
+until the user stops it, so a foreground call would never return) and offer it:
 
 ```bash
-vedit review lecture-guide.qmd --serve        # prints http://127.0.0.1:8765/
+nohup vedit review lecture-guide.qmd --serve > review.log 2>&1 < /dev/null &
+sleep 5; head -n 1 review.log        # serving http://127.0.0.1:8765/ ...
 ```
+
+Tell the user the URL from the log, not one you remember: the port moves (`--port`) when
+8765 is taken. It serves only on this machine.
 
 The page shows every screenshot in guide order with its caption, the plain frame to
 draw boxes and a crop on, and a few alternative moments (a few seconds either side, the
