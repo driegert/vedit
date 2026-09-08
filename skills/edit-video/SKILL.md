@@ -140,7 +140,7 @@ Write a `.json` file. Every key is optional; include only what was asked for.
 | `slides` | Full-screen cards **inserted** at a point: `{"at": time, "text": "..."}` or `{"at": time, "image": "/path.png"}`. These add to the running time. |
 | `chapters` | `{"at": time, "title": "..."}`. Produces real chapter markers plus a pasteable `0:00 Title` list. |
 | `chapter_titles` | `true` (or `{"seconds", "position", "color", "background", "font_size"}`): float each chapter's name over the footage at its start — black box, white text, top of frame, ~4 s. Adds no time; audio never stops. Prefer this over `slides`. `seconds` counts source footage: a cut moves the title to the surviving frame, a speed ramp over it compresses it. |
-| `toc_card` | `true` for a contents card at the start. Needs `chapters`. |
+| `toc_card` | `true` (or `{"seconds", "title", "background", "color", "font_size"}`) for a contents card at the start. Needs `chapters`. Defaults: 5 s, title `Contents`, white text on black. The automatic `font_size` is sized to the row count, not the title length (about 77 px at 1080p), so long chapter titles can run off the right edge -- set `font_size` (40-56 at 1080p) when they do. |
 | `audio` | `{"normalize": "ebu"}` for loudness, or `"peak"`. See below. |
 
 **Times**: `"1:30"`, `"1:02:03"`, `90` (seconds), `"90s"`, `"start"`, `"end"`. Ranges are
